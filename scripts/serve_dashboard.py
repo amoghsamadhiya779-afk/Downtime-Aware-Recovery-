@@ -186,22 +186,22 @@ def populate_sample_dataset(conn: sqlite3.Connection, n: int = 50, seed: int = 7
     from agent.executors.simulated import SimulatedExecutor
     from agent.pipeline import ingest, process_case
     from agent.policy.engine import load_rules
-    from datagen.generator import generate_dataset
-
     logger.log_event("dashboard.dataset.generating", n=n, seed=seed)
-    failures = generate_dataset(n=n, seed=seed)
+    from datagen.generate import generate
+    clock = VirtualClock(start=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
+    records, windows, manifest = generate(seed=seed, n=n, corpus="dev", start=clock.now())
     rules = load_rules()
     downtime = DowntimeStore(conn)
-    clock = VirtualClock(start=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc))
 
-    # Hidden response model (40% base recovery probability for clean transient)
+    # Hidden response model (75% base recovery probability for clean transient)
     def outcome_fn(verdict):
         return 0.75
 
     executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(seed))
     diagnosis = StubDiagnosis()
 
-    for pf in failures:
+    for rec in records:
+        pf = rec.failure
         ingest(conn, pf, seed=seed, rules=rules, now=clock.now())
         process_case(
             conn,

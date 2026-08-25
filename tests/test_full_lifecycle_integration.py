@@ -34,6 +34,7 @@ from agent.downtime import DowntimeStore
 from agent.executors.simulated import SimulatedExecutor
 from agent.models import (
     Action,
+    ActionOutcome,
     CaseState,
     Cohort,
     Decision,
@@ -186,10 +187,20 @@ def test_quarantine_reconciliation_integration(full_system):
     row = conn.execute("SELECT state FROM cases WHERE case_id = 'e2e_timeout_001'").fetchone()
     assert row["state"] == "QUARANTINED"
 
+    # Find uncertain cases
+    from agent.reconciliation import find_uncertain_cases
+    uncertain = find_uncertain_cases(conn)
+    assert len(uncertain) == 1
+    assert uncertain[0]["case_id"] == "e2e_timeout_001"
+
     # Run real reconciliation
-    reconciled = reconcile(conn, clock=clock, order_status_fn=lambda oid: "SUCCESS")
-    assert "e2e_timeout_001" in reconciled
-    assert reconciled["e2e_timeout_001"] == "RECOVERED"
+    new_state = reconcile(
+        conn,
+        "e2e_timeout_001",
+        actual_outcome=ActionOutcome.SUCCEEDED,
+        ts=clock.now(),
+    )
+    assert new_state == "RECOVERED"
 
     # Verify final landing state
     row_after = conn.execute("SELECT state FROM cases WHERE case_id = 'e2e_timeout_001'").fetchone()
