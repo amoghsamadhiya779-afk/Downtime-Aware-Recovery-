@@ -106,6 +106,21 @@ def reset(path: str | Path) -> sqlite3.Connection:
     """Drop and recreate. Used by `make gen` so runs are reproducible from a seed."""
     p = Path(path)
     if p.exists():
-        p.unlink()
+        try:
+            p.unlink()
+        except PermissionError:
+            conn = sqlite3.connect(str(p), isolation_level=None, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.executescript("""
+                DROP TRIGGER IF EXISTS cases_cohort_immutable;
+                DROP TRIGGER IF EXISTS audit_no_update;
+                DROP TRIGGER IF EXISTS audit_no_delete;
+                DROP TABLE IF EXISTS audit_events;
+                DROP TABLE IF EXISTS actions;
+                DROP TABLE IF EXISTS cases;
+                DROP TABLE IF EXISTS downtime_windows;
+            """)
+            conn.executescript(SCHEMA)
+            return conn
     p.parent.mkdir(parents=True, exist_ok=True)
     return connect(p)

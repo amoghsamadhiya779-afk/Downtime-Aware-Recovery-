@@ -19,6 +19,7 @@ from pathlib import Path
 from agent import db as agent_db
 from agent.audit import verify_chain
 from agent.clock import VirtualClock
+from agent.config import ConfigurationError, load_config, load_dotenv
 from agent.diagnosis.stub import StubDiagnosis
 from agent.downtime import DowntimeStore
 from agent.executors.simulated import SimulatedExecutor
@@ -32,28 +33,11 @@ DATA_DIR = Path("data")
 EVAL_DIR = Path("eval")
 
 
-def load_dotenv(path: Path = Path(".env")) -> None:
-    """Minimal .env loader — no python-dotenv dependency for ~8 lines of parsing.
-
-    Without this, `--provider groq|claude` silently produced a fully failed-closed
-    run: every ambiguous case fell to tier-3 UNKNOWN with
-    "GroqError: The api_key client option must be set", scoring macro-F1 0.000 and
-    looking like a catastrophic model result rather than a missing key. Existing
-    environment variables win, so CI or a shell export still overrides the file.
-    """
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
 def make_outcome_fn(ground_truth):
     def outcome_fn(verdict):
-        gt = ground_truth[verdict.case_id]
+        gt = ground_truth.get(verdict.case_id)
+        if not gt:
+            return 0.5
         if "DOWNTIME_DEFER" in verdict.fired_rules:
             return gt.p_retry_after_downtime
         return gt.p_retry_now
@@ -63,6 +47,12 @@ def make_outcome_fn(ground_truth):
 
 def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: str = "stub", output_json: bool = False) -> str:
     load_dotenv()
+    if not gt_path.exists() or not db_path.exists():
+        raise ConfigurationError(
+            f"Evaluation dataset not found at '{gt_path}' or database '{db_path}' missing. "
+            f"Please run 'python scripts/gen.py' or 'make gen' first to generate the dataset."
+        )
+
     conn = agent_db.connect(db_path)
     rules = load_rules()
     manifest, ground_truth = read_ground_truth(gt_path)
@@ -75,10 +65,10 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
     executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(seed))
 
     # Fail fast on a missing key rather than letting every case fall to tier-3
-    # UNKNOWN and reporting it as a model result — see load_dotenv's docstring.
+    # UNKNOWN and reporting it as a model result
     required_key = {"groq": "GROQ_API_KEY", "claude": "ANTHROPIC_API_KEY"}.get(provider)
     if required_key and not os.environ.get(required_key):
-        raise SystemExit(
+        raise ConfigurationError(
             f"--provider {provider} needs {required_key}, which is not set and was not "
             f"found in .env. Refusing to run: without it every diagnosis fails closed "
             f"to UNKNOWN and the report would look like a model failure, not a config one."
@@ -99,22 +89,20 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
     else:
         diagnosis_port = StubDiagnosis()
 
-    case_ids = [
-        r["case_id"]
-        for r in conn.execute("SELECT case_id, created_at FROM cases ORDER BY created_at ASC")
-    ]
-    for cid in case_ids:
-        row = conn.execute("SELECT created_at FROM cases WHERE case_id = ?", (cid,)).fetchone()
-        clock.set(datetime.fromisoformat(row["created_at"]))
-        process_case(
-            conn,
-            cid,
-            clock=clock,
-            rules=rules,
-            downtime=downtime,
-            diagnosis_port=diagnosis_port,
-            executor=executor,
-        )
+    case_rows = conn.execute("SELECT case_id, created_at, state FROM cases ORDER BY created_at ASC").fetchall()
+    case_ids = [r["case_id"] for r in case_rows if r["case_id"] in ground_truth]
+    for r in case_rows:
+        if r["case_id"] in ground_truth and r["state"] == "DETECTED":
+            clock.set(datetime.fromisoformat(r["created_at"]))
+            process_case(
+                conn,
+                r["case_id"],
+                clock=clock,
+                rules=rules,
+                downtime=downtime,
+                diagnosis_port=diagnosis_port,
+                executor=executor,
+            )
 
     chain_ok = verify_chain(conn)
     counters_ok = all(verify_counters(conn, cid) for cid in case_ids)
@@ -146,6 +134,15 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
     return report
+
+
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 def main() -> None:

@@ -15,11 +15,19 @@ import mimetypes
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+# Ensure project root is on sys.path when script is executed directly
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from agent import db as agent_db
+from agent.audit import verify_chain
+from agent.config import load_config
 from agent.dashboard import (
     compute_dashboard_metrics,
     get_transaction_detail,
@@ -80,7 +88,9 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
 
-        if path == "/api/metrics":
+        if path == "/api/health":
+            self._handle_health()
+        elif path == "/api/metrics":
             self._handle_metrics()
         elif path == "/api/transactions":
             self._handle_transactions(query)
@@ -99,6 +109,22 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         else:
             # Fallback to default static file serving
             super().do_GET()
+
+    def _handle_health(self) -> None:
+        try:
+            db_ok = bool(self.conn.execute("SELECT 1").fetchone())
+            chain_ok = verify_chain(self.conn)
+            health_data = {
+                "status": "healthy" if (db_ok and chain_ok) else "degraded",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": "0.1.0",
+                "database": "connected" if db_ok else "error",
+                "audit_chain_valid": chain_ok,
+            }
+            self._send_json(health_data, status=200 if (db_ok and chain_ok) else 503)
+        except Exception as e:
+            logger.log_event("dashboard.health.error", level="error", error=str(e), exc_info=True)
+            self._send_json({"status": "unhealthy", "error": str(e)}, status=503)
 
     def _serve_file(self, file_path: Path, content_type: str) -> None:
         if not file_path.exists():
@@ -216,10 +242,16 @@ def populate_sample_dataset(conn: sqlite3.Connection, n: int = 50, seed: int = 7
     logger.log_event("dashboard.dataset.populated", count=n)
 
 
+from agent.config import load_config
+
+
 def main() -> None:
+    config = load_config()
+
     parser = argparse.ArgumentParser(description="Serve the Recovery Control Plane Minimum Dashboard")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP server port (default: 8000)")
-    parser.add_argument("--db", type=str, default=":memory:", help="SQLite database path (default: :memory:)")
+    parser.add_argument("--host", type=str, default=config.dashboard_host, help=f"HTTP host (default: {config.dashboard_host})")
+    parser.add_argument("--port", type=int, default=config.dashboard_port, help=f"HTTP server port (default: {config.dashboard_port})")
+    parser.add_argument("--db", type=str, default=config.database_path, help=f"SQLite database path (default: {config.database_path})")
     parser.add_argument("--n", type=int, default=100, help="Sample transactions to generate if empty (default: 100)")
     parser.add_argument("--seed", type=int, default=777001, help="Random seed for sample dataset")
     args = parser.parse_args()
@@ -233,12 +265,12 @@ def main() -> None:
         print(f"Operational database is empty. Generating {args.n} sample transactions (seed={args.seed})...")
         populate_sample_dataset(conn, n=args.n, seed=args.seed)
 
-    server_address = ("", args.port)
+    server_address = (args.host if args.host != "127.0.0.1" else "", args.port)
     httpd = HTTPServer(server_address, DashboardRequestHandler)
     print(f"\n=======================================================")
-    print(f"  Executive Dashboard running at http://localhost:{args.port}")
-    print(f"  - 7 Core Metrics: http://localhost:{args.port}/api/metrics")
-    print(f"  - Transaction Ledger: http://localhost:{args.port}/api/transactions")
+    print(f"  Executive Dashboard running at http://{args.host}:{args.port}")
+    print(f"  - 7 Core Metrics: http://{args.host}:{args.port}/api/metrics")
+    print(f"  - Transaction Ledger: http://{args.host}:{args.port}/api/transactions")
     print(f"=======================================================\n")
 
     try:
