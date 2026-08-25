@@ -1,0 +1,28 @@
+[project]
+name = "recovery-control-plane"
+version = "0.1.0"
+description = "Downtime-aware payment recovery agent, measured against a randomized holdout."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "anthropic>=0.40",
+    "groq>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.98",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["agent", "agent.policy", "agent.diagnosis", "agent.executors", "datagen", "evalharness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]

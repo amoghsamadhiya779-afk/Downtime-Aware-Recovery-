@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Secrets — never commit. Pre-commit hook also greps for rzp_ prefixes.
+.env
+
+# Generated artefacts
+data/
+*.db
+eval/report.md

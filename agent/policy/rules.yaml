@@ -1,0 +1,102 @@
+# SINGLE SOURCE OF TRUTH for every policy threshold (CLAUDE.md invariant 10).
+# A threshold appearing anywhere in prose is a bug. Docs cite rule ids, never numbers.
+#
+# `verified: false` + `citation: null` means the constant is a SECONDHAND CLAIM.
+# Such rules still execute, but no compliance claim may be made from them anywhere
+# in the README, architecture doc, or pitch video until EVIDENCE.md carries a
+# primary source. See EVIDENCE.md E12-E15.
+
+version: 1
+
+# Global halt. Checked twice independently: policy rule 1, and again pre-dispatch
+# in the executor, so a single missed check cannot let an action through.
+kill_switch: false
+
+# Fraction of cases held back and never acted upon. Measurement integrity.
+holdout_fraction: 0.25
+
+rules:
+  - id: KILL_SWITCH
+    order: 1
+    enabled: true
+    verified: true
+    citation: "operational — see ARCHITECTURE.md §9"
+
+  - id: HOLDOUT_GUARD
+    order: 2
+    enabled: true
+    verified: true
+    citation: "measurement integrity — PRODUCT_THESIS.md primary KPI"
+
+  - id: TERMINAL_CLASS
+    order: 3
+    enabled: true
+    verified: true
+    citation: "thesis — stop early on unrecoverable failures"
+    params:
+      deny_classes: [TERMINAL, UNKNOWN]
+
+  - id: ATTEMPT_CAP
+    order: 4
+    enabled: true
+    verified: false          # <-- EVIDENCE.md E12, secondhand
+    citation: null
+    params:
+      default_cap: 3
+      by_method:
+        emandate: 3
+        upi: 3
+        card: 4
+        netbanking: 4
+
+  - id: DOWNTIME_DEFER
+    order: 5
+    enabled: true
+    verified: true
+    citation: "Razorpay Payment Downtime entity — EVIDENCE.md E6/E8"
+    params:
+      jitter_seconds: 300
+      unknown_end_backoff_minutes: 90
+      min_delay_minutes: 15
+
+  # ---------------------------------------------------------------------------
+  # Reserved for Phase 2. Ids and order are fixed NOW so that enabling them later
+  # never renumbers the rules above and never changes evaluation order.
+  # ---------------------------------------------------------------------------
+  - id: CONTACT_CAP
+    order: 6
+    enabled: false
+    verified: false
+    citation: null
+
+  - id: EXECUTION_WINDOW
+    order: 7
+    enabled: false
+    verified: false          # <-- EVIDENCE.md E13, secondhand
+    citation: null
+
+  - id: QUIET_HOURS
+    order: 8
+    enabled: false
+    verified: false          # <-- EVIDENCE.md E15, unsourced
+    citation: null
+
+  - id: COOLDOWN
+    order: 9
+    enabled: false
+    verified: true
+    citation: "configuration, not regulation"
+    params:
+      min_hours_between_attempts: 6
+
+  - id: EV_FLOOR
+    order: 10
+    enabled: false
+    verified: true
+    citation: "economics"
+
+  - id: CONFIDENCE_FLOOR
+    order: 11
+    enabled: false
+    verified: true
+    citation: "requires a fitted calibrator — Phase 3"
