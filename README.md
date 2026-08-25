@@ -1,27 +1,150 @@
 # Downtime-Aware Payment Recovery Control Plane
 
-> **Razorpay AI Buildathon 2026 — Track 03: AI Revenue Recovery**  
-> Autonomous payment failure recovery measured against a randomized holdout with a zero-LLM policy engine and cryptographic SHA-256 audit trail.
+Autonomous payment failure recovery for Indian payment rails (UPI, Cards, Netbanking, eMandates), evaluated against a randomized holdout control group with a deterministic Zero-LLM policy engine and a SHA-256 cryptographic audit chain.
 
 ---
 
-## 1. What This Is
+## 1. Problem
 
-When a digital payment fails in India (UPI, Card, Netbanking, eMandate), blind retry loops cause customer fatigue, gateway rate-limiting, and unnecessary transaction fees. 
+When a digital payment fails in India, payment systems face two main failure modes:
 
-This system provides an **Autonomous Recovery Control Plane** that:
-1. **Separates Triage from AI Reasoning**: Deterministic errors (e.g. `fraud_suspected`, `card_expired`) are triaged instantly with zero LLM inference.
-2. **Diagnoses Ambiguous Failures**: Genuinely ambiguous signals (e.g. `payment_failed`, `payment_declined_by_bank`) are routed to AI diagnosis for recoverability classification and optimal retry horizon estimation.
-3. **Enforces Zero-LLM Policy Veto**: A deterministic, rule-based Policy Engine holds absolute veto authority over AI proposals (enforcing method attempt caps, downtime deferral, economic floors, and holdout preservation).
-4. **Guarantees Idempotency & Uncertainty Quarantine**: Prevents double-charging via SHA-256 idempotency deduplication and isolates gateway timeouts into `QUARANTINED` status for reconciliation.
-5. **Cryptographic Auditability**: Every lifecycle event, policy verdict (`DecisionRecord`), and state transition is immutably appended to a SHA-256 hash-chain.
+1. **Blind Retries**: Repeatedly retrying a failed payment during an active bank or network outage. This exhausts customer retry limits, triggers fraud blocks, and incurs gateway fees.
+2. **Premature Abandonment**: Treating transient, recoverable errors (such as network timeouts) as permanently lost transactions.
+
+Directly connecting Large Language Models (LLMs) to payment gateways introduces significant risks:
+- Models can hallucinate recovery actions on unrecoverable fraud or expired instruments.
+- Model decisions are non-deterministic and difficult to audit under regulatory scrutiny.
+- Models lack built-in mechanisms for idempotency, retry caps, and financial state machines.
 
 ---
 
-## 2. Quickstart & Clean Environment Setup
+## 2. Solution
+
+The Payment Recovery Control Plane combines AI reasoning with deterministic safety rules:
+
+- **Two-Tier Triage**: Known errors (such as `fraud_suspected` or `card_expired`) are handled instantly without invoking an LLM. Only ambiguous errors (such as `payment_failed` or `payment_declined_by_bank`) are sent to AI diagnosis.
+- **Pure-Function AI**: The LLM suggests a recoverability class, estimated probability, and retry delay. It has no tool access, no database write access, and no payment dispatch authority.
+- **Zero-LLM Policy Gate**: A deterministic rules engine evaluates every AI proposal against strict invariants (such as method retry caps and active downtime windows) and holds sovereign veto power.
+- **Idempotent Execution**: Every action uses a SHA-256 idempotency key. Duplicate dispatches return cached results (`replayed=true`) without double-charging.
+- **Cryptographic Audit Log**: Every state transition, triage result, AI proposal, policy verdict, and execution result is stored in an append-only SHA-256 hash chain.
+
+---
+
+## 3. Architecture
+
+The system uses a single unified pipeline for both live recovery and evaluation replay:
+
+```
+Payment Failure Signal
+         │
+         ▼
+┌─────────────────────────┐
+│   Ingest & Triage       │ ── (Deterministic taxonomy triage)
+└─────────────────────────┘
+         │
+         ▼
+┌─────────────────────────┐
+│   AI Diagnostic Engine  │ ── (Pure function: recoverability class + delay)
+└─────────────────────────┘
+         │
+         ▼
+┌─────────────────────────┐
+│  Zero-LLM Policy Gate   │ ── (Rules engine: ATTEMPT_CAP, DOWNTIME_DEFER, etc.)
+└─────────────────────────┘
+         │
+         ▼
+┌─────────────────────────┐
+│  Idempotent Execution   │ ── (SHA-256 deduplication & SIM/LIVE dispatch)
+└─────────────────────────┘
+         │
+         ▼
+┌─────────────────────────┐
+│ State Machine & Audit   │ ── (Optimistic concurrency + SHA-256 hash chain)
+└─────────────────────────┘
+```
+
+### 9-Phase Transaction Lifecycle
+
+Every transaction moves through nine distinct phases:
+1. **Event**: Ingestion of the raw failure signal, order ID, amount, and payment method.
+2. **Context**: Cohort assignment (Treated vs Holdout) and initial triage.
+3. **Diagnosis**: Recoverability classification and calibrated confidence.
+4. **Evidence**: Grounded field references and risk signals.
+5. **Proposal**: Proposed recovery action, optimal delay, and expected probability.
+6. **Policy Verdict**: Deterministic gate decision (`ALLOW` or `DENY`) with fired rules.
+7. **Execution**: Dispatch verification, execution mode, and replay detection.
+8. **Outcome**: Final transaction state (`RECOVERED`, `ABANDONED`, or `QUARANTINED`).
+9. **Audit Trail**: Verification of the immutable SHA-256 event hash chain.
+
+---
+
+## 4. Role of AI
+
+The AI model is strictly isolated as a diagnostic component:
+
+- **Input**: Sanitized error metadata, instrument type, prior attempt count, and downtime status.
+- **Output**: Structured JSON specifying `recoverability`, `confidence`, `proposed_action`, `proposed_delay_minutes`, and `expected_outcome`.
+- **Privileges**: Zero database privileges, zero API access, zero tool execution capability.
+- **Multi-Tier Fallbacks**:
+  - *Tier 0*: Primary model provider (e.g. Claude 3.5 Sonnet / Groq Llama 3.3).
+  - *Tier 1*: Alternate model provider fallback.
+  - *Tier 2*: Taxonomy prior based on historical payment failure statistics.
+  - *Tier 3*: Fallback to `UNKNOWN` recoverability. The policy gate halts execution (`STOP`), preventing any speculative charge.
+
+---
+
+## 5. Safety Invariants
+
+The system enforces six core safety guarantees:
+
+1. **Deterministic Sovereignty**: The Policy Engine (`agent/policy/engine.py`) reads rules from `agent/policy/rules.yaml`. It can veto any AI recommendation regardless of model confidence.
+2. **Per-Method Attempt Caps**: Hard limits on retries prevent customer fatigue and card network penalties:
+   - Card: 4 attempts
+   - UPI: 2 attempts
+   - Netbanking: 2 attempts
+   - eMandate: 3 attempts
+3. **Downtime Deferral**: When an outage window is active for a specific bank or handle, retries are deferred until the recorded end of the downtime window.
+4. **Holdout Guard**: A randomized 25% holdout cohort is isolated unconditionally. The holdout cohort assignment cannot be changed after creation, enforced by SQLite database triggers.
+5. **Idempotency**: All execution dispatches require a unique SHA-256 idempotency key. Duplicate calls never trigger secondary payment authorizations.
+6. **Optimistic Concurrency**: State transitions require version checks, preventing race conditions or double-processing during concurrent execution.
+
+---
+
+## 6. Evaluation
+
+The system is evaluated by replaying failure events against a hidden ground truth dataset containing organic recovery counterfactuals (`p_organic`).
+
+### Benchmark Results (Corpus: dev, Seed: 42, n=300 cases)
+
+The following metrics are generated directly by `evalharness.run`:
+
+| Metric | Measured Value | Notes |
+| :--- | :--- | :--- |
+| **Incremental Value** | **₹5,266,944.63 per 1,000 cases** | 95% Bootstrap CI: [₹2,236,886.14, ₹7,998,325.23] |
+| **Gross Recovery (Treated)** | **29.5%** | 67 of 227 treated cases recovered |
+| **Gross Recovery (Holdout)** | **6.8%** | 5 of 73 holdout cases recovered organically |
+| **Holdout Contamination** | **0 cases** | Zero holdout transactions were acted upon |
+| **Attempt Cap Breaches** | **0 cases** | Zero transactions exceeded retry limits |
+| **Policy Veto Rate** | **21.7%** | 50 of 230 proposals vetoed by safety rules |
+| **Audit Chain Integrity** | **Verified (True)** | SHA-256 cryptographic chain validated across all events |
+
+---
+
+## 7. Failure Handling
+
+The system includes explicit handling for unexpected operational failures:
+
+- **Gateway Timeouts**: If a gateway does not respond within the timeout window (`ExecutionUncertain`), the transaction transitions to `QUARANTINED` for out-of-band reconciliation rather than initiating an unverified retry.
+- **Malformed AI Responses**: If an LLM returns invalid JSON or corrupted schema fields, the system falls back to Tier 3 (`UNKNOWN`) and marks the case as `ABANDONED`.
+- **Duplicate Ingestion**: Re-ingesting an existing transaction order returns the existing record without generating duplicate attempts or charging the customer twice.
+- **Kill Switch**: Setting `kill_switch: true` in `agent/policy/rules.yaml` immediately blocks all retry dispatches across the entire system.
+
+---
+
+## 8. Setup & Installation
 
 ### Prerequisites
-- Python 3.11+ (tested on Python 3.11 & 3.12)
+- Python 3.11 or 3.12
 - Git
 
 ### Installation Steps
@@ -38,97 +161,61 @@ python -m venv .venv
 # On Linux/macOS:
 # source .venv/bin/activate
 
-# 3. Install application and test dependencies
+# 3. Install project dependencies
 pip install -e ".[dev]"
 
-# 4. Copy environment configuration
+# 4. Create local environment configuration
 cp .env.example .env
+
+# 5. Generate reproducible dataset (Seed 42 -> 300 cases)
+python scripts/gen.py
+
+# 6. Run automated test suite (313 tests)
+pytest -v
 ```
 
 ---
 
-## 3. Core Commands & Workflows
+## 9. Demo
 
-### A. Generate Seeded Synthetic Dataset
-Generates reproducible operational SQLite database and hidden ground truth:
+The system provides three deterministic demo scenarios that are fully reproducible from a clean state:
+
+### Scenario 1: Successful Recovery
+A transient UPI authorization failure is diagnosed as `TRANSIENT_INFRA`, approved by policy (`ALLOW`), dispatched, and successfully recovered (₹2,499.00).
+
 ```powershell
-python scripts/gen.py
-# Or via Makefile: make gen
+python scripts/demo_controls.py --scenario successful_recovery
 ```
 
-### B. Run Complete Test Suite
-Runs all 310 unit, property-based, and lifecycle integration tests:
+### Scenario 2: Unsafe AI Recommendation Blocked
+An adversarial AI proposal recommending `RETRY` with 100% confidence on a card transaction that has already reached its 4-attempt cap is vetoed by the Zero-LLM Policy Gate (`DENY` -> `ABANDONED`).
+
 ```powershell
-python -m pytest -v
-# Or via Makefile: make test
+python scripts/demo_controls.py --scenario unsafe_ai_blocked
 ```
 
-### C. Run Evaluation Harness
-Replays the evaluation corpus and calculates incremental recovery vs. randomized holdout:
+### Scenario 3: Duplicate & Timeout Safety
+A gateway timeout during netbanking dispatch transitions safely into `QUARANTINED` status, and duplicate dispatches are deduplicated via idempotency keys (`replayed=true`).
+
 ```powershell
-python -m evalharness.run
-# Or with machine-readable JSON output:
-python -m evalharness.run --json
+python scripts/demo_controls.py --scenario duplicate_timeout_handled
 ```
 
-### D. Launch Executive Control Plane Dashboard
-Starts the interactive glassmorphic web dashboard on `http://localhost:8000`:
+### Run All Demos Sequentially
+```powershell
+python scripts/demo.py
+```
+
+### Launch Interactive Executive Dashboard
 ```powershell
 python scripts/serve_dashboard.py --port 8000
 ```
-Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, transaction ledger, and 9-phase lifecycle detail view.
-
-### E. Run Developer Failure Mode Controls (CLI)
-Triggers real backend system execution for 4 distinct failure modes:
-```powershell
-python scripts/demo_controls.py --all
-```
+Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, Highcharts analytics grid, and the 9-phase transaction ledger.
 
 ---
 
-## 4. Evaluation Benchmark Results
+## 10. Limitations
 
-*The following metrics are quoted directly from generated `eval/report.md` (corpus `dev`, seed=42, n=300, S1 scenario):*
-
-| Metric | Result | Description |
-| :--- | :--- | :--- |
-| **Incremental Recovered Value** | **₹5,266,944.63 per 1,000** | 95% CI [₹2,236,886.14, ₹7,998,325.23] (2,000 bootstrap resamples) |
-| **Gross Recovery Rate (Treated)** | **29.5%** | Recovery rate on treated arm (n=227) |
-| **Gross Recovery Rate (Holdout)** | **6.8%** | Baseline organic recovery rate on holdout arm (n=73) |
-| **Ambiguous Macro-F1** | **0.151** | AI diagnostic quality on ambiguous subset (n=88) |
-| **Wasted Attempt Rate** | **6.7%** | Attempts landing on unrecoverable terminal errors |
-| **Holdout Contamination** | **0** | Zero holdout cases were acted upon (Invariant 4) |
-| **Attempt-Cap Breaches** | **0** | Zero transactions exceeded per-method retry caps |
-| **Policy Veto Rate** | **21.7%** | 50/230 AI proposals vetoed by the Policy Engine |
-| **Cryptographic Audit Chain** | **Verified (True)** | SHA-256 hash-chain validated across all events |
-
----
-
-## 5. Architectural Invariants
-
-1. **One Code Path, Two Modes**: Replay evaluation and live execution share the exact same pipeline; only `Clock` and `ExecutorPort` are injected.
-2. **Zero-Tool LLM**: The AI model is a pure function (structured in → structured out). It holds zero database, API, or execution privileges.
-3. **Zero-LLM Policy Veto**: The policy engine (`agent/policy/engine.py`) evaluates rules deterministically from `agent/policy/rules.yaml`.
-4. **Unconditional Holdout Guard**: Rule `HOLDOUT_GUARD` isolates the 25% holdout cohort to prove incremental rupee value against organic recovery. Cohort immutability is enforced by SQLite trigger.
-5. **Fail-Closed Safety**: Any schema error, malformed LLM response, or unseen reason code safely falls back to `Tier 3 UNKNOWN` and halts into `ABANDONED`.
-6. **Physical Separation**: `agent/` never imports `datagen/` or hidden ground truth.
-
----
-
-## 6. Container Deployment (Docker)
-
-```bash
-# Build and start container
-docker compose up --build -d
-
-# Verify container health
-curl -f http://localhost:8000/api/health
-```
-
----
-
-## 7. Known Limitations & Adverse Findings
-
-1. **Synthetic Response Model**: In Phase 1, recovery probabilities for transient infrastructure errors are modeled synthetically based on documented gateway characteristics (`EVIDENCE.md`).
-2. **Sub-Optimal Stub Macro-F1**: Baseline `StubDiagnosis` scores macro-F1 of 0.151 on ambiguous errors because it predicts only `TRANSIENT_INFRA`. Real LLM providers (`ClaudeDiagnosis`, `GroqDiagnosis`) should be supplied with API keys in `.env` for production evaluation.
-3. **Attempt Cap Source**: Attempt caps (UPI: 2, Card: 4, Netbanking: 2, eMandate: 3) are derived from industry best practices; pending final formal publication by card networks.
+1. **Synthetic Response Model**: In the current development evaluation corpus, bank recovery probabilities during downtime are modeled using synthetic distributions based on the failure taxonomy.
+2. **Baseline Stub Diagnostic Accuracy**: The default offline stub (`StubDiagnosis`) scores a macro-F1 of 0.151 on ambiguous errors because it consistently predicts `TRANSIENT_INFRA`. Connecting live LLM providers (`ClaudeDiagnosis` or `GroqDiagnosis`) with active API keys is required for full diagnostic reasoning.
+3. **Fixed Attempt Caps**: Attempt caps are currently configured globally per payment method rather than dynamically adjusted per merchant risk tier or specific issuing bank agreements.
