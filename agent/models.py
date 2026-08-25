@@ -72,9 +72,10 @@ class CaseState(str, Enum):
     QUARANTINED = "QUARANTINED"
 
 
-TERMINAL_STATES = frozenset(
-    {CaseState.RECOVERED, CaseState.ABANDONED, CaseState.HOLDOUT_CLOSED, CaseState.QUARANTINED}
-)
+# TERMINAL_STATES deliberately does NOT live here. Terminality is a property of
+# the transition table, so it is derived from it in agent/state.py rather than
+# hand-listed in a second place that can drift. The version that used to sit here
+# was never read by anything. See DECISIONS.md ADR-020.
 
 
 class Instrument(BaseModel):
@@ -298,6 +299,13 @@ class Verdict(BaseModel):
     case_id: str
     decision: Decision
     action: Action
+    # Which attempt this verdict authorizes. Set by the policy engine from the
+    # case state it evaluated, and binding: the idempotency key derives from THIS
+    # number, not from whatever the case row says at dispatch time. Deriving the
+    # key from a live read meant one authorization could be executed twice — the
+    # first execution incremented `attempts`, so a re-delivery of the same verdict
+    # computed a different key and spent again. See DECISIONS.md ADR-018.
+    attempt_no: int = Field(ge=1)
     execute_at: datetime | None = None
     fired_rules: list[str] = Field(default_factory=list)
     reason: str = ""
@@ -308,14 +316,46 @@ class Verdict(BaseModel):
     def is_executable(self) -> bool:
         return self.decision is Decision.ALLOW and self.action is not Action.STOP
 
+    @property
+    def idempotency_key(self) -> str:
+        """Pure function of the authorization. Re-delivering the same verdict
+        always yields the same key, which is what actually makes at-least-once
+        dispatch safe."""
+        return idempotency_key(self.case_id, self.action, self.attempt_no)
+
+
+class ExecutionMode(str, Enum):
+    SIM = "SIM"
+    LIVE = "LIVE"
+    SHADOW = "SHADOW"
+
+
+class ActionOutcome(str, Enum):
+    """What the action did. Distinct from whether it was *allowed* to run —
+    a refusal raises ActionRefused and produces no ActionResult at all, because
+    a refused action never ran and must not consume attempt budget."""
+
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
 
 class ActionResult(BaseModel):
+    """The typed output of every executable action."""
+
     model_config = ConfigDict(frozen=True)
 
     case_id: str
     action: Action
     idempotency_key: str
-    succeeded: bool
+    outcome: ActionOutcome
     executed_at: datetime
-    mode: str = "SIM"  # SIM | LIVE | SHADOW
+    mode: ExecutionMode = ExecutionMode.SIM
+    # True when this call was an idempotent no-op. `outcome` then carries the
+    # ORIGINAL attempt's result, not a fresh one — collapsing the two into a
+    # single "replayed" outcome would lose whether the first attempt succeeded.
+    replayed: bool = False
     detail: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return self.outcome is ActionOutcome.SUCCEEDED

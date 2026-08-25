@@ -575,3 +575,201 @@ that is a real hardening option, not a present vulnerability, and it was out of
 scope for "fix only the paths where the LLM can bypass policy."
 
 Full suite: **89/89** (68 prior + 21 new policy-engine tests).
+
+## ADR-018 — Typed action contracts, and a real double-spend closed
+
+**Built:** `agent/executors/contracts.py` declares, for every executable action,
+the five things an executor must honour — input model, validation, output, typed
+error states, idempotency key.
+
+**Scope, stated honestly:** there is exactly **one** executable action today,
+`Action.RETRY`. `Action.STOP` is a state transition that never reaches an executor
+(`is_executable` is False for it). `Action.RECOVERY_LINK` is a reserved enum
+member with no implementation anywhere, and is deliberately given **no contract**
+— writing one against no implementation and no stated requirements is speculation,
+not specification. Same reasoning that removed `NullExecutor` in ADR-008.
+
+**The contract preserves invariant 8.** `ExecutorPort.execute()` still accepts a
+`Verdict` and nothing else. The per-action input (`RetryInput`) is *derived* from
+the Verdict under validation rather than replacing it as the port's parameter, so
+each action gets its own typed parameter object without the authorization envelope
+being bypassable.
+
+| Contract element | Where |
+|---|---|
+| Input | `RetryInput` — frozen, `attempt_no >= 1`, `amount_paise > 0`, non-empty `case_id`/`order_id` |
+| Validation | `build_retry_input()` — one implementation, so no executor can skip a precondition by accident |
+| Output | `ActionResult` with typed `ActionOutcome` (SUCCEEDED/FAILED) plus a separate `replayed` flag |
+| Error states | `ActionRefused(ActionErrorCode)` — six codes, partitioned into terminal vs retryable via `.retryable` |
+| Idempotency key | `verdict.idempotency_key` — a pure function of the authorization |
+
+### The bug this surfaced
+
+**`SimulatedExecutor` derived the idempotency key from a live `attempts` read at
+dispatch time, not from the Verdict.** The module docstring claimed this "makes
+at-least-once scheduler delivery safe." It did the opposite:
+
+```
+execute(V)   -> key = f(case, RETRY, 1)  -> spends
+attempts += 1                             (pipeline does this after execution)
+execute(V)   -> key = f(case, RETRY, 2)  -> spends AGAIN
+```
+
+One authorization, two spends — triggered by exactly the re-delivery pattern
+at-least-once dispatch produces. Not reachable in Phase 1 (execution is
+synchronous, nothing re-delivers), but Phase 2's scheduler is precisely what
+introduces it, and the code already claimed to be safe against it.
+
+**Fixed** by binding `attempt_no` onto `Verdict` at authorization time (set by
+`evaluate()` from the state it actually evaluated) and deriving the key from the
+Verdict alone. Re-delivery now always maps to the same key.
+
+**`ActionOutcome` deliberately has no REPLAYED member.** Collapsing replay into
+the outcome would lose whether the *original* attempt succeeded; `replayed` is a
+separate boolean and `outcome` always carries the real result.
+
+**Refusal vs failure is now a type-level distinction.** `ActionRefused` means the
+action never ran and must not consume attempt budget; a `FAILED` ActionResult
+means it ran and did. Previously both were expressed as a bare `ValueError` or a
+`succeeded=False` result, which conflated them.
+
+### `tests/test_idempotency.py` deleted, not fixed
+
+Its `test_different_attempt_numbers_are_not_deduplicated` **asserted the buggy
+behaviour as intended** — it claimed to test "a genuinely new attempt" but built
+that scenario by re-delivering the *same* verdict after mutating `attempts`, which
+is not a new authorization at all. Both of its tests are superseded by
+`tests/test_action_contracts.py`, which covers the same ground correctly:
+re-delivery of one authorization must spend once
+(`test_redelivery_after_attempts_incremented_does_not_double_spend`), while two
+distinct verdicts must both run (`test_a_genuinely_new_authorization_is_not_deduplicated`).
+Deleting was the right call over editing, because keeping a test that asserts the
+defect alongside one that asserts the fix would leave the suite self-contradictory.
+
+Full suite: **105/105** (89 prior − 2 deleted + 18 new contract tests).
+
+## ADR-019 — Executor implemented against the contracts; two more rejection paths closed
+
+Auditing `SimulatedExecutor` against the four required rejections found two
+already covered and two genuinely missing:
+
+| Rejection | Before | After |
+|---|---|---|
+| Invalid commands | ✓ `INVALID_PARAMS` | unchanged |
+| Unauthorized commands | ✓ `NOT_AUTHORIZED` | unchanged |
+| Duplicate commands | partial — only *completed* duplicates | **`DUPLICATE_IN_FLIGHT`** added |
+| Invalid state transitions | **absent** | **`ILLEGAL_STATE`** added |
+
+**Gap 1 — the executor never read `cases.state`.** It trusted that the policy
+engine's `REQUIRED_STATE` rule had checked it. That defeats defense in depth for a
+concrete reason, not a theoretical one: `REQUIRED_STATE` checks state at
+*authorization* time, and time passes before dispatch. A case can reach a terminal
+state between the two, and an executor that trusts the verdict to still be current
+has no way to notice. Added `check_executable_state()` to the contract, with
+`EXECUTABLE_CASE_STATES = {SCHEDULED, EXECUTING}` — the two states from which a
+dispatch legitimately arrives (the pipeline moves a case to EXECUTING immediately
+before calling; a Phase 2 scheduler would hand one over in SCHEDULED).
+
+**Gap 2 — an in-flight duplicate fell through and executed.** The idempotency
+lookup filtered on `executed_at IS NOT NULL`, so a row that was *dispatched but
+not yet completed* did not match, execution proceeded, and the subsequent
+`INSERT OR REPLACE` silently overwrote the in-flight row. Now refused with
+`DUPLICATE_IN_FLIGHT`, classified **retryable** — once the in-flight attempt
+completes, a later delivery lands on the replay path instead of conflicting.
+
+**Check ordering is load-bearing, and is the one design judgment here.** The
+completed-duplicate replay is checked **before** the state check, deliberately.
+After a successful attempt the case is legitimately `RECOVERED`; if the state
+check ran first, a re-delivery would be refused with `ILLEGAL_STATE`, a scheduler
+would read that as failure, and it would retry forever. Returning the original
+result is what makes at-least-once delivery *converge* rather than loop.
+`test_completed_duplicate_replays_even_from_a_terminal_state` pins that ordering
+so a future refactor cannot quietly invert it.
+
+**On "reject duplicate commands" — a judgment call worth surfacing.** Exact
+re-delivery of a *completed* authorization is still answered with an idempotent
+replay rather than a rejection, because that is what makes at-least-once dispatch
+safe (a rejection would be read as failure). "Reject" is honoured for the case
+where it is genuinely correct: a conflicting, still-in-flight duplicate, where
+there is no original result to return. If the intent was that *all* duplicates
+raise, this is the line to revisit.
+
+**Verified beyond unit tests:** a full `evalharness` run over the 300-case corpus
+produced numbers **identical** to the pre-change baseline (incremental
+₹5,266,944.63, 178 attempts, 49 abandoned, holdout contamination 0, chain
+verifies, counters reconcile) — confirming the new rejections block nothing the
+pipeline legitimately dispatches.
+
+Full suite: **115/115** (105 prior + 10 new).
+
+## ADR-020 — State machine typed and closed; the orphaned-case gap solved
+
+### The gap that mattered
+
+`agent/pipeline.py` moves a case to `EXECUTING` and *then* calls the executor.
+ADR-019 gave the executor six ways to raise `ActionRefused` — and **`EXECUTING`
+had no edge to anywhere those refusals could land**. Its allowed set was
+`{RECOVERED, FAILED_ATTEMPT, ABANDONED}`, all reachable only via `transition()`
+calls the function never reaches because the exception escaped. A refused command
+stranded the case in a **non-terminal state with no way out**, permanently.
+
+Not hypothetical: it is the direct consequence of the raise paths added one ADR
+earlier. It never fired in the dev corpus only because `SimulatedExecutor` had no
+reason to refuse.
+
+**Fixed at both ends.** Two new edges — `EXECUTING -> SCHEDULED` (retryable
+refusal, back to the queue) and `EXECUTING -> QUARANTINED` (terminal refusal,
+needs a human) — plus a `try/except ActionRefused` in the pipeline that routes on
+`refusal.retryable`, records a new `ACTION_REFUSED` audit event, and returns a
+`DecisionTrace` instead of propagating.
+
+`ACTION_REFUSED` is a **distinct event type from `ACTION_RESULT`** on purpose: a
+refusal means nothing ran and no attempt was consumed. Conflating them would
+corrupt `audit.replay()`'s attempt count, which `verify_counters()` checks against
+the denormalised column — so the bug would have surfaced as a confusing counter
+mismatch rather than as what it is.
+
+### Three sources of truth for "terminal", collapsed to one
+
+Terminality was encoded in three places that could drift independently:
+`agent/models.py:TERMINAL_STATES` (a frozenset that **nothing ever read** — dead
+code), the empty sets in `VALID_TRANSITIONS`, and a hand-written string set in
+`tests/test_adversarial.py`. Now derived once from the transition table
+(`TERMINAL_STATES = {s for s, targets in VALID_TRANSITIONS.items() if not targets}`),
+the dead constant deleted, and the test importing the real one. This matters
+beyond tidiness: `QUARANTINED` is semantically "awaiting human review" and will
+*stop* being terminal the moment a resolution path is implemented — derived
+terminality follows that automatically, three hand-maintained copies would not.
+
+### Typed, not stringly-typed
+
+`VALID_TRANSITIONS` is now keyed by `CaseState` rather than raw strings, and
+`transition()` coerces its target to `CaseState` first. Consequence worth naming:
+a typo like `"RECOVERD"` previously raised `IllegalTransition` — a misleading
+diagnosis, since the transition was not illegal, the state did not exist. It now
+raises `ValueError` naming the bad value.
+
+### Tests
+
+`tests/test_state_machine.py` (98 tests) is **exhaustive over the full 9x9 state
+product** rather than illustrative: every pair is asserted allowed or rejected, so
+adding a state or an edge without deciding what it means for every other state
+fails the suite instead of passing silently. Plus table-integrity properties — no
+self-transitions, every target is a real state, and **every non-terminal state can
+reach a terminal one** (a fixed-point search, which is precisely the property
+`EXECUTING` violated).
+
+`tests/test_refusal_recovery.py` (11 tests) covers the pipeline half: each of the
+eight error codes lands the case in the right state, a refusal consumes no attempt
+budget, the refusal is auditable, and the hash chain still verifies.
+
+One fixture bug found while writing them: the first version used `seed=7`, which
+put the test case in the **holdout** arm, so `HOLDOUT_GUARD` denied it before it
+ever reached an executor and no refusal could occur. The corrected fixture asserts
+`assign_cohort(...) is TREATED` rather than assuming it.
+
+**Verified end to end:** a full `evalharness` run produced numbers identical to
+the pre-change baseline (₹5,266,944.63, 178 attempts, 49 abandoned, contamination
+0, chain verifies, counters reconcile).
+
+Full suite: **224/224** (115 prior + 98 state machine + 11 refusal recovery).
