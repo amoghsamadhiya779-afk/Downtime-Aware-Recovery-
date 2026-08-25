@@ -24,6 +24,7 @@ from agent.models import DiagnosisProposal
 
 MODEL = "claude-sonnet-5"
 TIMEOUT_SECONDS = 8
+MAX_TOKENS = 600  # schema grew this session (expected_outcome, risks[], missing_information[]) — 400 was already tight
 
 
 class ClaudeDiagnosis:
@@ -38,7 +39,7 @@ class ClaudeDiagnosis:
         client = anthropic.Anthropic(api_key=self._api_key, timeout=TIMEOUT_SECONDS)
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=400,
+            max_tokens=MAX_TOKENS,
             system=prompting.SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -48,14 +49,16 @@ class ClaudeDiagnosis:
         prompt = prompting.build_prompt(inp)
         fields = prompting.evidence_fields(inp)
 
+        last_error: str | None = None
         for attempt in range(2):  # tier 1: try, then one repair
             try:
                 raw = self._call(prompt if attempt == 0 else prompt + prompting.REPAIR_SUFFIX)
                 return prompting.validate(raw, fields)
-            except Exception:
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
                 continue
 
-        fallback = prompting.tier2_fallback(inp)
+        fallback = prompting.tier2_fallback(inp, last_error)
         if fallback is not None:
             return fallback
-        return prompting.tier3_fallback(inp)
+        return prompting.tier3_fallback(inp, last_error)

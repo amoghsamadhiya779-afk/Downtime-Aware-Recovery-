@@ -69,6 +69,109 @@ unproven" gap partially (one working call, not yet a corpus-scale measurement).
   evaluation work, deferred to resume) and `data/synthetic/` (redundant, superseded
   by `data/dataset/dev/`).
 
+- **AI-1 output schema extended**: `DiagnosisProposal` now requires
+  `expected_outcome` (probability the proposed action succeeds — a different axis
+  from `confidence`, which is about the diagnosis), `risks` (closed-enum
+  `RiskFlag` list), and `missing_information` (closed-enum list). All required, no
+  defaults — see DECISIONS.md ADR-013. Every construction site across the
+  codebase updated; 34/34 tests still pass.
+- **Found and fixed a real bug verifying this live, not from the mocks**:
+  `openai/gpt-oss-120b` is a reasoning model — at the old `max_tokens=400` with no
+  `reasoning_effort` set, every real call hit `finish_reason: "length"` with
+  ~90% of the token budget burned on hidden reasoning, truncating the JSON and
+  silently falling through to fail-closed on **every single request**. Fixed
+  (`reasoning_effort="low"`, `max_tokens=600`); confirmed live with genuinely good,
+  schema-compliant output on two real cases, `fallback_tier=0` on both. Claude's
+  `max_tokens` also bumped to 600, defensively.
+
+- **AI-1 reasoning quality improved, scoped strictly to `agent/diagnosis/`**
+  (+ one line threading an existing field through `pipeline.py` — no policy or
+  executor code touched). Two real "use available context" gaps closed:
+  `is_recurring` was available on `PaymentFailure` but never reached
+  `DiagnosisInput` at all; `downtime.instrument_match` was computed but never
+  sent to the model. Three new "avoid unsupported conclusions" validation gates
+  added to `prompting.validate()` (confidence requires evidence; near-certainty
+  forbids outstanding missing_information; TERMINAL forbids RETRY), all following
+  the existing repair-retry-then-fallback pattern, no new code path. System
+  prompt updated to state the three rules explicitly. See DECISIONS.md ADR-014.
+  **Honest note caught during verification**: `instrument_match` is currently
+  always equal to `active` given how `active_at()` filters — that particular fix
+  adds no new information today, kept for forward-compatibility and schema
+  completeness, not because it currently changes model behavior.
+- Verified live against 3 real cases (recurring mandate, thin-signal one-off,
+  high-contact-count repeat customer): 3/3 `fallback_tier=0`, zero rule
+  violations, confidence and expected_outcome diverging sensibly rather than
+  collapsing to one number. Full suite 34/34.
+
+- **AI output validation hardened — a real fail-open bug found and closed, at two
+  independent layers.** `agent/policy/engine.py::evaluate()`'s final line was a
+  bare fallthrough to `Action.RETRY` for anything that wasn't `STOP` — so
+  `Action.RECOVERY_LINK` (a real, schema-valid enum member, reserved/unimplemented)
+  would have been silently reinterpreted as a RETRY authorization instead of
+  rejected. Fixed at the source (`agent/diagnosis/prompting.py::validate()` now
+  rejects any action outside `{RETRY, STOP}`) and independently at the policy
+  layer (a new structural guard, rule 0, denies + STOPs + records
+  `UNSUPPORTED_ACTION`, deliberately not a `rules.yaml` entry since it's not a
+  tunable threshold). See DECISIONS.md ADR-015.
+- Also added: markdown-code-fence stripping before JSON parsing (models routinely
+  wrap output in ` ```json ` despite instructions not to — parsing more tolerant,
+  validation not weakened), and validation-failure reasons now surface in fallback
+  `rationale` instead of being silently swallowed by `except Exception: continue`.
+- **New test file `tests/test_ai_output_validation.py`** (28 tests) — explicit,
+  one-to-one proof for each required category: malformed output, missing fields,
+  invalid enum values (including nested `risks[].category`), impossible
+  confidence (including `expected_outcome.probability_of_success`), unsupported
+  actions at both layers, and total-exhaustion fail-safe behavior. Full suite:
+  **62/62** (34 prior + 28 new). Verified live against the real Groq API
+  afterward — the added strictness doesn't cause spurious rejection.
+
+- **Non-AI baseline arm built and the first real A1-vs-A3 comparison run.**
+  `agent/diagnosis/baseline.py` — context-blind fixed retry, a drop-in
+  `DiagnosisPort` so swapping arms changes exactly one component. Selectable via
+  `--provider baseline`. 6 tests assert its context-blindness so it can't drift
+  into being "smart" and silently invalidate the comparison. See ADR-016.
+- **Bug found doing it: the AI arm had never actually run.** `evalharness/run.py`
+  never loaded `.env`, so every ambiguous case failed closed to UNKNOWN with a
+  missing-API-key error — macro-F1 0.000, reading as catastrophic model failure
+  rather than missing config. Fixed with a minimal stdlib `load_dotenv()` plus a
+  fail-fast guard that now refuses to run `--provider groq|claude` without a key.
+- **Comparison result — the AI arm does not currently beat the baseline, and this
+  corpus cannot answer whether it would.** Baseline incremental ₹5.27M/1,000 vs
+  AI ₹4.34M/1,000, CIs overlapping almost entirely. More importantly, the
+  macro-F1 comparison is measuring nothing: `datagen/generate.py::_pick_true_class()`
+  assigns AMBIGUOUS labels with **zero dependence on any input feature**, so
+  chance is the ceiling by construction — observed scores (0.151 baseline, 0.260
+  AI) match the arithmetic predictions for majority-guessing and
+  proportional-guessing against random labels almost exactly.
+
+- **Policy engine v2 (ADR-017).** Decisions reduced to **ALLOW / DENY / REVIEW**
+  as specified — `DEFER` folded into ALLOW (timing lives in `execute_at`, the fact
+  of deferral in `fired_rules`), `DOWNGRADE` deleted as inert. Every decision now
+  carries rule + reason + `rules_version` + `decided_at`, the latter two **required
+  with no defaults** so a Verdict cannot be constructed outside policy by accident.
+  Four new gates: `REQUIRED_STATE`, `SUPPORTED_ACTION` (promoted from a hardcoded
+  guard to a real rule), `DUPLICATE_ACTION`, plus `EV_FLOOR` and `CONFIDENCE_FLOOR`
+  enabled. `rules.yaml` → version 2. **`REVIEW` routes to `QUARANTINED`, which was
+  previously an unreachable dead state** (flagged in `docs/00_project_state.md`).
+- **New test file `tests/test_policy_engine.py`** (21 tests) covering all six
+  required scenarios — valid / excessive / low-confidence / duplicate / economic
+  failure / missing required state — each asserting *which rule* produced the
+  decision, not just the decision, since rule order is the safety argument.
+- **Architecture review done; one real LLM-bypass bug found and fixed.**
+  `proposed_delay_minutes` is an unbounded LLM-controlled integer flowing into
+  `timedelta()`; confirmed empirically that `timedelta(minutes=10**15)` raises
+  `OverflowError`, so a model could crash the policy function rather than pass it.
+  Fixed with a `max_delay_minutes` clamp. Direction was already safe (the existing
+  floor meant the model could only delay, never accelerate), so this was an
+  availability hole, not a spend hole.
+- Verified there is **exactly one production executor call site** and **exactly one
+  production `Verdict` construction site** — the LLM → proposal → policy → executor
+  chain holds with no bypass. `EV_FLOOR` was deliberately built to ignore the
+  model's own `probability_of_success`, which would otherwise have let it inflate
+  past a financial control. Remaining known gap, reported not fixed: `Verdict` is a
+  plain Pydantic model, so nothing cryptographically proves provenance — no
+  exploitable path today, and out of scope for this pass.
+
 ## Currently broken / not yet built
 
 - **`ClaudeDiagnosis` has still never been run against the real Anthropic API** —
@@ -118,9 +221,16 @@ unproven" gap partially (one working call, not yet a corpus-scale measurement).
 
 ## Next highest-value action
 
-1. **Run `evalharness/run.py --provider groq` against a real corpus** (not just one
-   hand-built case) to get an actual macro-F1 number from a real model. This is the
-   single most important unresolved claim in `docs/03_product_thesis.md`.
+1. **Fix AMBIGUOUS label generation — now the top blocker.** Done above: ran the
+   real corpus comparison, and it surfaced that
+   `datagen/generate.py::_pick_true_class()` draws ambiguous labels independently
+   of every input feature, so no model can beat chance on that subset and the
+   whole "does AI add value?" question is unanswerable with this corpus. Ambiguous
+   labels need to depend on latent state a model could plausibly infer (downtime
+   co-occurrence, attempt history, amount band) while staying genuinely ambiguous
+   to a pure reason-lookup. **Do this before re-running any arm comparison, and do
+   not tune it until the AI wins** — precisely what `eval/PREREGISTRATION.md`
+   exists to prevent. The sealed `data/dataset/eval/` split stays untouched.
 2. **Day 2 — Razorpay test-mode spike.** Real keys are now in `.env`; get one
    genuine order → failure → payment-link → capture cycle working end to end.
    Closes the field's most-cited gap (`research/COMPETITORS.md` E17).

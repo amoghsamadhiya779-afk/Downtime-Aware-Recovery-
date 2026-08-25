@@ -216,3 +216,362 @@ real evaluation work, which is explicitly deferred to when the user resumes.
 **Also cleaned up as stale/redundant, not bugs but clutter:** `data/synthetic/`
 (an early smoke-test output directory, identical seed to and superseded by
 `data/dataset/dev/` — see docs/06_evaluation.md).
+
+## ADR-013 — `DiagnosisProposal` extended: expected_outcome, risks, missing_information
+
+**Chosen:** three new fields on AI-1's output, all required (no default — the model
+must state them on every call, even as an empty list, rather than silently omit
+them):
+
+- `expected_outcome: ExpectedOutcome` — `{probability_of_success, horizon_minutes}`.
+  Deliberately a different axis from `confidence`: confidence is how sure the model
+  is about the *diagnosis*; `probability_of_success` is how likely it thinks the
+  *proposed action* is to work. A live Groq response this session demonstrated
+  exactly why the distinction is real, not academic: `CUSTOMER_FIXABLE` at
+  confidence 0.78, but `probability_of_success` only 0.3, because being sure of the
+  diagnosis doesn't mean the action will succeed on this attempt.
+- `risks: list[RiskFlag]` — closed `RiskCategory` enum + a 140-char note, not free text.
+- `missing_information: list[MissingInfoCategory]` — closed enum, what the model
+  would have wanted but the input didn't carry.
+
+**Rejected:** free-text risk/missing-information strings. The instruction driving
+this change was explicit — "no free-form execution commands" — and a field a model
+can fill with arbitrary text is exactly the kind of field that could carry an
+instruction through the audit trail undetected. Every new field is either a closed
+enum, a bounded numeric, or a short bounded string paired with a closed enum.
+`proposed_action` was already a closed enum (RETRY/STOP) and stays that way — this
+ADR doesn't touch it, just confirms it satisfies the same constraint the new fields
+were held to.
+
+**Field renamed vs. kept:** the requirement listed "diagnosis" as a required field
+name. Kept the existing `recoverability` name rather than renaming — a rename would
+have touched the enum's own name, `agent/triage.py`, `agent/policy/engine.py`,
+`evalharness/metrics.py`, `datagen/schema.py`'s `GroundTruth.true_class`, and every
+test, for a purely cosmetic difference with no functional benefit. `recoverability`
+*is* the diagnosis; documented as such rather than churned.
+
+**Every construction site updated** (Pydantic required fields with no default
+means every one had to be touched, not just the new-code paths):
+`agent/diagnosis/stub.py` (all three fixtures), `agent/diagnosis/prompting.py`
+(`tier2_fallback`), `agent/pipeline.py` (both triage-resolved construction sites),
+`tests/test_policy.py`, and the `_valid_json()` fixtures in both provider test
+files. Full suite re-run clean after each site: 34/34.
+
+**Real bug found verifying this against the live API, not just the mocks:**
+`openai/gpt-oss-120b` is a reasoning model — hidden reasoning tokens count against
+`max_tokens`. At the old `max_tokens=400` with no `reasoning_effort` set, live
+calls confirmed `finish_reason: "length"` with 350–398 of the 400 tokens consumed
+by `reasoning_tokens` alone, leaving truncated or empty JSON on **every single
+real call** — silently falling through to the tier-3 fail-closed path every time,
+which the mocked tests could never have caught since they don't exercise real
+token accounting at all. Fixed with `reasoning_effort="low"` and `max_tokens=600`;
+reasoning-token consumption dropped to ~100 tokens and both live test cases
+produced genuinely good, schema-compliant, `fallback_tier=0` output. Claude's
+`max_tokens` bumped to 600 too, defensively — no reasoning-token issue there, but
+the schema is genuinely bigger now regardless of provider.
+
+## ADR-014 — AI-1: two real "use available context" gaps closed, three "avoid unsupported conclusions" gates added
+
+**Scope discipline:** every change in this ADR lives in `agent/diagnosis/` plus
+one line in `agent/pipeline.py` that only threads an existing field
+(`pf.is_recurring`) into `DiagnosisInput` construction. Nothing in
+`agent/policy/` or `agent/executors/` was touched, per the instruction driving
+this change.
+
+**Context gaps found by reading the code, not assumed:**
+
+- `is_recurring` was available on `PaymentFailure` and used throughout the
+  pipeline, but never made it into `DiagnosisInput` at all — the diagnosis layer
+  had no way to know whether a failure was on a recurring mandate (different
+  NPCI/billing-cycle failure profile) versus a one-off checkout. Added to
+  `DiagnosisInput`, `build_prompt()`, and `evidence_fields()`.
+- `DowntimeContext.instrument_match` was computed by `DowntimeStore.context_at()`
+  but never sent to the model — the prompt said "downtime is active" without ever
+  saying whether it actually covers this payment's instrument. **Caught on
+  verification, not assumed fixed:** re-reading `agent/downtime.py` after making
+  this change showed `active_at()` already filters to matching instruments before
+  returning a window at all, so `instrument_match` is currently *always* equal to
+  `active` in the live system — this fix adds zero new information today. Kept it
+  anyway for two honest reasons, not to inflate the fix's value: it's
+  forward-compatible if `active_at()` ever starts surfacing same-method,
+  different-instrument windows as advisory context, and omitting a field that
+  exists on `DowntimeContext` would leave the prompt's downtime block silently
+  incomplete relative to the schema. Confirmed live afterward that the model does
+  cite it as evidence when reasoning about downtime, even though it's currently
+  redundant with `active`.
+
+**Three new validation gates in `prompting.validate()`, all following the
+existing pattern** (raise `ValueError` -> caught by the existing repair-retry
+loop -> falls through to tier-2/tier-3 on exhaustion — no new code path added to
+either provider):
+
+1. `confidence >= 0.7` requires at least one `evidence[]` entry. A confidence
+   score with nothing behind it is an assertion, not a diagnosis.
+2. `confidence >= 0.85` requires empty `missing_information[]`. Claiming
+   near-certainty while admitting a relevant gap is the model's own contradiction,
+   not a defensible nuanced position.
+3. `recoverability=TERMINAL` requires `proposed_action=STOP`. `agent/policy/`
+   already independently denies a TERMINAL retry via `TERMINAL_CLASS` regardless
+   of what the model proposes — that enforcement is untouched — but a model whose
+   own proposal contradicts its own diagnosis is producing an unsupported
+   conclusion at the diagnosis layer itself, worth catching before it ever
+   reaches policy, not just after.
+
+The system prompt was updated to state these three rules explicitly (told, not
+just silently enforced after the fact) — the model should be steered away from
+these responses, not merely punished for them.
+
+**Verified live, not just unit-tested:** three real cases against
+`openai/gpt-oss-120b` (recurring mandate + active downtime, one-off checkout with
+thin signal, repeat customer with high contact count) — 3/3 answered directly
+(`fallback_tier=0`), zero validation-rule violations, and every case showed
+`confidence` and `expected_outcome.probability_of_success` diverging sensibly
+(e.g. confidence 0.9 in a CUSTOMER_FIXABLE diagnosis paired with only 0.1
+probability the proposed STOP-then-wait path succeeds soon) rather than
+collapsing to one number. Full suite still 34/34 after every change.
+
+## ADR-015 — AI output validation: unsupported-action gap closed, malformed-input robustness added, failure reasons made auditable
+
+**Real bug found by reading `agent/policy/engine.py::evaluate()` closely, not
+assumed fine because the types looked right:** its final line was
+`return verdict(decision, Action.RETRY, reason, execute_at)` — a bare fallthrough
+for "anything that reached this point," not an explicit check that the proposal
+actually said RETRY. `Action.RECOVERY_LINK` is a real, schema-valid enum member
+(reserved for a future phase, zero implementation anywhere) — a model proposing
+it would pass Pydantic validation and then be **silently reinterpreted as RETRY**
+by this fallthrough. That is not failing safely; it is failing silently wrong,
+which is a materially worse failure mode than a crash, since nothing would ever
+signal that it happened.
+
+**Chosen — two independent lines of defense, not one:**
+
+1. `agent/diagnosis/prompting.py::validate()` now rejects any `proposed_action`
+   outside `SUPPORTED_ACTIONS = {RETRY, STOP}`, raising the same way every other
+   validation failure does — caught by the existing repair-retry loop, falling
+   through to tier-2/tier-3 fallback on exhaustion. First line of defense: reject
+   at the source, before the proposal exists as anything but raw model output.
+2. `agent/policy/engine.py::evaluate()` gained a new structural guard — rule 0,
+   checked even before the kill switch, deliberately **not** a `rules.yaml` entry
+   since it's a precondition on the function's input, not a tunable business
+   threshold. Any `proposed_action` outside `{RETRY, STOP}` is denied with
+   `Action.STOP` and `"UNSUPPORTED_ACTION"` recorded in `fired_rules`. Second,
+   independent line of defense for any `DiagnosisProposal` that reaches `evaluate()`
+   by a path that skips (1) — a hand-constructed proposal, a future third
+   provider, a bug in (1) itself.
+
+**Also added, scoped to the diagnosis layer:**
+
+- `_strip_code_fence()` in `prompting.py` — models frequently wrap JSON in
+  ` ```json ... ``` ` despite explicit instructions not to; that's a formatting
+  habit, not a content problem, and treating it as malformed was rejecting
+  otherwise-valid responses for a reason worth engineering around rather than
+  just retrying and hoping. Parsing is more tolerant; validation is not — every
+  field is still fully checked after stripping.
+- `tier2_fallback()` / `tier3_fallback()` now accept `last_error: str | None` and
+  fold it into the fallback's `rationale`. Both provider `diagnose()` loops now
+  capture `f"{type(e).__name__}: {e}"` from the final failed attempt and pass it
+  through. Previously the exception was silently swallowed by
+  `except Exception: continue` — a human reading the audit trail could see *that*
+  a fallback fired but never *why*. Now they can.
+
+**New test file, `tests/test_ai_output_validation.py` (28 tests)** — maps 1:1 to
+the five required categories (malformed output, missing fields, invalid enum
+values including nested ones, impossible confidence including
+`expected_outcome.probability_of_success`, unsupported actions) plus the actual
+"fails safely" property checked at both layers: `test_recovery_link_rejected_at_diagnosis_layer`
+and `test_policy_fails_safely_on_unsupported_action_defense_in_depth` (the latter
+constructs a `DiagnosisProposal` directly, bypassing `validate()` entirely, to
+prove the policy-layer guard holds independently) plus
+`test_fails_safely_on_total_exhaustion_no_clean_prior` (confirms total exhaustion
+lands on `UNKNOWN`/`STOP`/tier 3, never a crash, never a guessed RETRY).
+
+**Verified live after implementing:** a real call against `openai/gpt-oss-120b`
+with all new validation layered on still returned a direct, correct answer
+(`fallback_tier=0`) — the added strictness doesn't cause spurious rejection of
+genuinely good output. Full suite: 62/62 (34 prior + 28 new).
+
+## ADR-016 — Non-AI baseline arm added; first real A1-vs-A3 comparison run; the comparison is currently unanswerable and here is why
+
+**Built:** `agent/diagnosis/baseline.py::BaselineDiagnosis` — a `DiagnosisPort`
+like every other, so swapping it in changes exactly one component and the
+comparison isolates the diagnosis layer rather than measuring some other
+difference between two pipelines. It is deliberately context-blind: every
+ambiguous case gets `TRANSIENT_INFRA`, retry once, fixed 60-minute delay. No
+branching on reason, downtime, amount, or attempt history.
+
+**Rejected: a "smarter" baseline that branches on `error.reason`.** That is
+precisely what `agent/triage.py` already does for the ~70% CLEAN majority, and
+those cases never reach a `DiagnosisPort` at all. A reason-branching baseline
+would silently borrow the same taxonomy the AI arm uses, and `A3 - A1` would then
+measure "LLM vs. lookup table on the residual" instead of "does asking why help at
+all?". `tests/test_baseline.py` (6 tests) asserts the context-blindness property
+directly, so a future edit can't quietly make the baseline smart and invalidate
+every comparison built on it.
+
+**Bug found on the first comparison run — the AI arm had never actually run.**
+`evalharness/run.py` read `GROQ_API_KEY` from `os.environ`, but nothing loaded
+`.env` (earlier smoke tests parsed it manually, which is why they worked). All 88
+ambiguous cases failed closed to tier-3 UNKNOWN with
+`"GroqError: The api_key client option must be set"`, producing macro-F1 exactly
+0.000 and 122 abandoned cases — which reads as a catastrophic model result rather
+than a missing config value. Two things worked exactly as designed here: the
+fallback ladder failed closed under total API failure instead of guessing, and
+ADR-015's `last_error` surfacing made this diagnosable in a single audit-log
+query rather than a hunt. Fixed with a minimal stdlib `load_dotenv()` (no
+python-dotenv dependency for ~8 lines) plus a **fail-fast guard**: `--provider
+groq|claude` now refuses to start without its key rather than producing a
+plausible-looking but meaningless report.
+
+**Results, same seed, same corpus, same policy/executor/ledger — only the
+`DiagnosisPort` differs:**
+
+| Metric | Baseline (A1) | Groq AI (A3) | Reading |
+|---|---|---|---|
+| Incremental ₹/1,000 | 5,266,945 | 4,343,291 | **Baseline higher** |
+| 95% CI | [2.24M, 8.00M] | [1.29M, 6.98M] | Overlap almost entirely |
+| Gross recovery rate (treated) | 29.5% | 27.3% | Baseline higher |
+| Wasted-attempt rate | 6.7% (12/178) | 5.9% (9/153) | AI slightly better |
+| Cases abandoned, zero spend | 49 | 74 | AI more conservative |
+| Ambiguous macro-F1 | 0.151 | 0.260 | AI higher — but see below |
+
+**Honest conclusion: the AI arm does not beat the baseline here, and this corpus
+cannot answer whether it would.** Two independent reasons, both worth stating
+plainly rather than burying:
+
+1. **The CIs overlap almost entirely**, and the point estimate favours the
+   baseline. At n=300 with a 25% holdout this design cannot resolve a difference
+   of this size — consistent with the ≈10pp MDE already documented in
+   `docs/06_evaluation.md`. The mechanism is legible: the baseline retries more
+   (178 vs 153 attempts), and under the current response model more retries
+   mechanically recovers more gross money, while the AI arm's extra caution (74 vs
+   49 abandoned) trades recovered rupees for a lower wasted-attempt rate.
+
+2. **The macro-F1 comparison is not measuring diagnosis quality at all.**
+   `datagen/generate.py::_pick_true_class()` assigns AMBIGUOUS labels from a fixed
+   weight distribution with **zero dependence on any input feature** — not reason,
+   not downtime, not amount, not attempt history. The label is noise with respect
+   to everything the model can see, so chance is the ceiling by construction. The
+   observed numbers are exactly what chance predicts: always-guess-majority scores
+   ≈0.143 (baseline observed 0.151), guess-proportionally scores ≈0.25 (AI
+   observed 0.260). The AI's apparent macro-F1 "win" is the arithmetic gap between
+   two chance strategies, not evidence of better reasoning.
+
+**Not fixed in this ADR, deliberately.** Making AMBIGUOUS labels depend on latent
+features the model could actually infer is a data-generator redesign, not a
+baseline implementation, and doing it while looking at these results risks tuning
+the generator until the AI wins — exactly the failure `eval/PREREGISTRATION.md`
+exists to prevent. Recorded as the top blocker for Phase 3 instead. The
+`data/dataset/eval/` held-out split is untouched by this work and remains sealed.
+
+Full suite after all changes: 68/68 (62 prior + 6 baseline).
+
+## ADR-017 — Policy engine v2: ALLOW/DENY/REVIEW, four required decision fields, four new gates, and one real LLM-bypass fix
+
+**Decision vocabulary reduced to three, as specified.** `DEFER` and `DOWNGRADE`
+are gone. "Permitted, but later" is an `ALLOW` carrying a later `execute_at` — the
+timing already lived in the Verdict's own field, and *that* a deferral happened
+already lived in `fired_rules`, which is where `evalharness/metrics.py` reads it
+from. So nothing downstream lost information. `DOWNGRADE` was never returned by
+any rule (documented as inert in `docs/00_project_state.md`) and was deleted
+rather than carried. Fewer outcomes means fewer states a caller can mishandle.
+`REVIEW` is new and routes to `QUARANTINED` — a state that existed in the state
+machine but was previously **unreachable**, which `docs/00_project_state.md` had
+already flagged as dead. `CONFIDENCE_FLOOR` gives it its purpose.
+
+**Every decision now carries four fields.** `rules_version` and `decided_at` are
+required on `Verdict` with **no defaults**. That is deliberate beyond
+record-keeping: constructing a Verdict outside the policy engine is now an
+explicit act that must supply both, rather than something that can happen by
+accident and silently produce an authorization nothing authorized. It is not a
+cryptographic guarantee — `Verdict` is still a plain Pydantic model — but it
+removes the accidental-forgery path.
+
+**`rules.yaml` bumped to version 2, and the v1 promise was broken knowingly.**
+v1's comment promised that enabling a reserved rule would never renumber the
+others. That held for *enabling* — but three genuinely new gates
+(`REQUIRED_STATE`, `SUPPORTED_ACTION`, `DUPLICATE_ACTION`) had to sit ahead of the
+existing ones, which renumbers. The version bump is exactly the mechanism for
+signalling that, and since every Verdict records `rules_version`, decisions made
+under v1 remain interpretable.
+
+**Nine gates, ordered so that rule order is itself the safety argument:**
+input validity (`REQUIRED_STATE`, `SUPPORTED_ACTION`) → operator override
+(`KILL_SWITCH`) → measurement integrity (`HOLDOUT_GUARD`) → business gates
+(`TERMINAL_CLASS`, `ATTEMPT_CAP`, `DUPLICATE_ACTION`, `EV_FLOOR`) →
+`CONFIDENCE_FLOOR` last, because **a DENY must always beat a REVIEW**: a terminal
+case that is also low-confidence must be refused outright, not queued for a human
+as though it were merely uncertain. `tests/test_policy_engine.py` asserts that
+ordering directly rather than trusting it.
+
+**`SUPPORTED_ACTION` promoted from hardcoded guard to named rule.** ADR-015 added
+it as an unconditional structural check; it is now a real `rules.yaml` entry with
+its allowed set as a parameter, so the fired-rule id in the audit trail matches a
+rule that actually exists in the config. The `fired_rules` id changed from
+`UNSUPPORTED_ACTION` to `SUPPORTED_ACTION`, matching how every other rule records
+itself by its own name rather than by its violation.
+
+### Architecture review: LLM → proposal → policy → executor
+
+**Traced every path. No bypass exists.** Verified by grep across the whole tree,
+not by assumption:
+
+- **Exactly one production executor call site** — `agent/pipeline.py:process_case`.
+  Both production entry points (`evalharness/run.py`, `scripts/demo.py`) reach it
+  through that one function.
+- **Exactly one production `Verdict` construction site** — inside
+  `agent/policy/engine.py::evaluate()`. The variable passed to the executor is
+  always the return value of `evaluate()`; there is no branch that builds one
+  another way.
+- **`ExecutorPort.execute()` accepts `Verdict` only**, and `SimulatedExecutor`
+  re-checks `verdict.is_executable` itself rather than trusting its caller —
+  proper defense in depth, and `REVIEW` correctly evaluates as non-executable
+  under the new enum.
+- **The LLM holds zero tools** (invariant 2), so its only channel is the
+  `DiagnosisProposal` fields.
+
+**Every LLM-controlled field, traced to what it can reach:**
+
+| Field | Reaches | Can it bypass a control? |
+|---|---|---|
+| `proposed_action` | Re-derived by policy; never passed through | No — `SUPPORTED_ACTION` + explicit action on every return |
+| `recoverability` | `TERMINAL_CLASS` | Can lie to *avoid* a deny, but `ATTEMPT_CAP`/`EV_FLOOR` still bind — this is the adversarial case already covered by `tests/test_adversarial.py` |
+| `confidence` | `CONFIDENCE_FLOOR` | Only via the `calibrated_confidence` seam; raising it can only move DENY→REVIEW→ALLOW *within* gates that still bind |
+| `expected_outcome.probability_of_success` | **Nothing** | Deliberately: see below |
+| `proposed_delay_minutes` | `execute_at` | **Was a real hole — fixed, see below** |
+| `evidence`, `risks`, `missing_information`, `rationale` | Audit log only | No |
+
+**Real bug found and fixed: unbounded `proposed_delay_minutes` crashed the policy
+function.** It is an LLM-controlled integer with `ge=0` and no upper bound,
+flowing straight into `timedelta(minutes=...)`. Confirmed empirically rather than
+theorised: `timedelta(minutes=10**15)` raises
+`OverflowError: Python int too large to convert to C int`. A model returning a
+large enough delay would take `evaluate()` down mid-case — defeating the gate by
+crashing it rather than by passing it. Fixed with a `max_delay_minutes` clamp
+(7 days) in `rules.yaml`; `tests/test_policy_engine.py::test_absurd_proposed_delay_is_clamped_not_crashed`
+covers it. Note the *direction* was already safe — the existing `max(...)` floor
+meant the model could only ever push a retry later, never sooner — so this was an
+availability hole, not a spend hole.
+
+**Design choice made because of this review: `EV_FLOOR` ignores the model's own
+success estimate.** The natural implementation would compute expected value from
+`proposal.expected_outcome.probability_of_success` — which would let the model
+inflate its way past a financial control simply by claiming a higher chance of
+success. `assumed_success_rate` is a `rules.yaml` constant instead, so the rule is
+blind to what the model believes. `test_ev_floor_ignores_the_models_own_success_estimate`
+asserts a proposal claiming `probability_of_success=1.0` is still denied below
+break-even.
+
+**`CONFIDENCE_FLOOR` respects invariant 5** ("raw model confidence never gates").
+`evaluate()` takes an explicit `calibrated_confidence` keyword; when the caller
+passes nothing it falls back to `proposal.confidence` with the identity mapping
+Phase 3 will replace. That is the honest current state — a real seam that exists
+in code, rather than pretending a calibration step is already there.
+
+**Not fixed, reported instead:** `Verdict` remains a plain Pydantic model, so
+nothing *cryptographically* proves a given Verdict came from `evaluate()`. No such
+forgery path exists in production today, and the required-fields change removes
+the accidental version. A signed or engine-private token would close it fully;
+that is a real hardening option, not a present vulnerability, and it was out of
+scope for "fix only the paths where the LLM can bypass policy."
+
+Full suite: **89/89** (68 prior + 21 new policy-engine tests).

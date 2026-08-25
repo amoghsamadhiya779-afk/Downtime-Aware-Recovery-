@@ -26,6 +26,7 @@ from agent.models import (
     DiagnosisProposal,
     DowntimeContext,
     Verdict,
+    idempotency_key,
 )
 
 RULES_PATH = Path(__file__).with_name("rules.yaml")
@@ -78,11 +79,19 @@ def evaluate(
     rules: Rules,
     now: datetime,
     downtime: DowntimeContext,
+    *,
+    calibrated_confidence: float | None = None,
 ) -> Verdict:
     """Pure function. First DENY wins; rule order is fixed by rules.yaml.
 
-    DEFER is not a weaker ALLOW — it means "permitted, but not yet", and the returned
-    `execute_at` is binding on the scheduler.
+    Three outcomes only — ALLOW, DENY, REVIEW. "Permitted, but later" is an ALLOW
+    carrying a later `execute_at`; there is no separate DEFER decision.
+
+    `calibrated_confidence` is the seam for CLAUDE.md invariant 5: policy must
+    never gate on the model's raw self-reported number. Until Phase 3 fits a real
+    calibrator the mapping is identity, and the caller passing nothing gets
+    `proposal.confidence` — which is honest about the current state rather than
+    pretending a calibration step exists that doesn't.
     """
     fired: list[str] = []
 
@@ -95,21 +104,60 @@ def evaluate(
             fired_rules=list(fired),
             reason=reason,
             rules_version=rules.version,
+            decided_at=now,
         )
 
-    # 1 — global halt.
+    # --- input validity: can this decision be made at all? -------------------
+
+    # 1 — REQUIRED_STATE. A case in a terminal state being submitted for
+    # authorization means something upstream is broken; authorizing spend from
+    # that position would compound the bug rather than contain it.
+    if rules.enabled("REQUIRED_STATE"):
+        actionable = set(rules.params("REQUIRED_STATE").get("actionable_states", []))
+        if case.state.value not in actionable:
+            fired.append("REQUIRED_STATE")
+            return verdict(
+                Decision.DENY,
+                Action.STOP,
+                f"case state {case.state.value} is not actionable",
+            )
+
+    # 2 — SUPPORTED_ACTION. Action.RECOVERY_LINK is a real, schema-valid enum
+    # member reserved for a future phase that nothing implements. Without this,
+    # the final `return verdict(..., Action.RETRY, ...)` below is a bare
+    # fallthrough for "anything that isn't STOP" and would silently reinterpret an
+    # unsupported action as a retry — failing silently wrong, not safely.
+    # agent/diagnosis/prompting.py rejects this at the source too; this is the
+    # independent second line for any proposal reaching evaluate() another way.
+    if rules.enabled("SUPPORTED_ACTION"):
+        supported = set(rules.params("SUPPORTED_ACTION").get("supported", []))
+        if proposal.proposed_action.value not in supported:
+            fired.append("SUPPORTED_ACTION")
+            return verdict(
+                Decision.DENY,
+                Action.STOP,
+                f"proposed_action={proposal.proposed_action.value!r} is not implemented",
+            )
+
+    # --- operator override ---------------------------------------------------
+
+    # 3 — global halt.
     if rules.kill_switch:
         fired.append("KILL_SWITCH")
         return verdict(Decision.DENY, Action.STOP, "kill switch engaged")
 
-    # 2 — measurement integrity. Unconditional, and deliberately ahead of everything
-    # except the halt: a contaminated holdout invalidates the primary KPI, which is
-    # a worse outcome than any single missed recovery.
+    # --- measurement integrity -----------------------------------------------
+
+    # 4 — unconditional, and deliberately ahead of every business gate: a
+    # contaminated holdout invalidates the primary KPI, which is a worse outcome
+    # than any single missed recovery.
     if case.cohort is Cohort.HOLDOUT:
         fired.append("HOLDOUT_GUARD")
         return verdict(Decision.DENY, Action.STOP, "holdout arm — never acted upon")
 
-    # 3 — stop early on unrecoverable failures.
+    # --- business gates ------------------------------------------------------
+
+    # 5 — stop early on unrecoverable failures.
     if rules.enabled("TERMINAL_CLASS"):
         deny = set(rules.params("TERMINAL_CLASS").get("deny_classes", []))
         if proposal.recoverability.value in deny:
@@ -120,7 +168,7 @@ def evaluate(
                 f"class {proposal.recoverability.value} is not recoverable",
             )
 
-    # 4 — bounded attempt budget. Confidence-independent by design: a maximally
+    # 6 — bounded attempt budget. Confidence-independent by design: a maximally
     # confident wrong model cannot spend past this.
     if rules.enabled("ATTEMPT_CAP"):
         cap = _cap_for(rules, case)
@@ -128,21 +176,70 @@ def evaluate(
             fired.append("ATTEMPT_CAP")
             return verdict(Decision.DENY, Action.STOP, f"attempt cap reached ({cap})")
 
+    # 7 — the same logical action must not run twice. The executor keeps its own
+    # unique-index check as well; this is the earlier, cheaper refusal that also
+    # leaves a policy-level record of why nothing happened.
+    if rules.enabled("DUPLICATE_ACTION") and case.executed_action_keys:
+        prospective = idempotency_key(case.case_id, proposal.proposed_action, case.attempts + 1)
+        if prospective in case.executed_action_keys:
+            fired.append("DUPLICATE_ACTION")
+            return verdict(
+                Decision.DENY,
+                Action.STOP,
+                f"action already executed for attempt {case.attempts + 1}",
+            )
+
     # Nothing below can turn a STOP proposal into spending.
     if proposal.proposed_action is Action.STOP:
         return verdict(Decision.DENY, Action.STOP, "model proposed STOP")
 
-    # Baseline timing: whatever the model asked for, floored at the configured minimum.
+    # 8 — economic floor. `assumed_success_rate` comes from rules.yaml, NOT from
+    # proposal.expected_outcome.probability_of_success: sourcing it from the model
+    # would let the model inflate its way past a financial control just by
+    # claiming a higher chance of success. The rule is deliberately blind to what
+    # the model believes.
+    if rules.enabled("EV_FLOOR"):
+        ev_params = rules.params("EV_FLOOR")
+        cost = int(ev_params.get("action_cost_paise", 0))
+        p_assumed = float(ev_params.get("assumed_success_rate", 0.0))
+        expected_value = p_assumed * case.amount_paise - cost
+        if expected_value <= 0:
+            fired.append("EV_FLOOR")
+            return verdict(
+                Decision.DENY,
+                Action.STOP,
+                f"expected value {expected_value:.0f} paise does not cover action cost {cost}",
+            )
+
+    # 9 — uncertainty routes to a human. Last among the gates: a DENY from any
+    # rule above must beat a REVIEW, never the other way round.
+    if rules.enabled("CONFIDENCE_FLOOR"):
+        floor = float(rules.params("CONFIDENCE_FLOOR").get("min_calibrated_confidence", 0.0))
+        confidence = calibrated_confidence if calibrated_confidence is not None else proposal.confidence
+        if confidence < floor:
+            fired.append("CONFIDENCE_FLOOR")
+            return verdict(
+                Decision.REVIEW,
+                Action.STOP,
+                f"calibrated confidence {confidence:.2f} below floor {floor:.2f} — human review",
+            )
+
+    # --- timing, not a gate --------------------------------------------------
+
     dt_params = rules.params("DOWNTIME_DEFER")
     min_delay = int(dt_params.get("min_delay_minutes", 15))
-    delay = max(int(proposal.proposed_delay_minutes or 0), min_delay)
+    # proposed_delay_minutes is an LLM-controlled integer with no upper bound in
+    # the schema. Unclamped it flows straight into timedelta(), where a large
+    # enough value raises OverflowError and takes down the policy function — the
+    # model defeating the gate by crashing it rather than by passing it.
+    max_delay = int(dt_params.get("max_delay_minutes", 10080))
+    delay = min(max(int(proposal.proposed_delay_minutes or 0), min_delay), max_delay)
     execute_at = now + timedelta(minutes=delay)
-    decision = Decision.ALLOW
     reason = "proceed"
 
-    # 5 — downtime-aware timing. Advisory input to *when*, never to *whether*:
-    # a wrong or late downtime signal costs latency, never correctness, because
-    # rules 1-4 have already bound the decision.
+    # 10 — downtime-aware timing. Advisory input to *when*, never to *whether*: a
+    # wrong or late downtime signal costs latency, never correctness, because
+    # every gate above has already bound the decision.
     if rules.enabled("DOWNTIME_DEFER") and downtime.active and downtime.instrument_match:
         jitter = timedelta(seconds=int(dt_params.get("jitter_seconds", 300)))
         if downtime.expected_end is not None:
@@ -160,8 +257,7 @@ def evaluate(
         # outcome_fn, which keys off fired_rules to pick the response-model branch.
         if candidate > execute_at:
             execute_at = candidate
-            decision = Decision.DEFER
             reason = candidate_reason
             fired.append("DOWNTIME_DEFER")
 
-    return verdict(decision, Action.RETRY, reason, execute_at)
+    return verdict(Decision.ALLOW, Action.RETRY, reason, execute_at)
