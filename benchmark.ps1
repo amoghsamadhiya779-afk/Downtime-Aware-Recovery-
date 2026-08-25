@@ -1,5 +1,5 @@
 if (Test-Path ".venv\Scripts\python.exe") {
-    .venv\Scripts\python.exe scripts\benchmark.py
+    .venv\Scripts\python.exe scripts\build_comparison.py
 } else {
-    python scripts\benchmark.py
+    python scripts\build_comparison.py
 }

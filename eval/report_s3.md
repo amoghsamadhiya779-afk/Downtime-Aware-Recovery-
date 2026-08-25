@@ -1,33 +1,33 @@
 # Evaluation Report — corpus `dev` seed=42 scenario=S3
 
-n=300 · generator=0.2.0 · times_scored=100 · n_treated=227 · n_holdout=73
+n=300 · generator=0.2.0 · times_scored=103 · n_treated=227 · n_holdout=73
 
 ## Primary KPI — incremental ₹ recovered per 1,000 at-risk (vs. holdout)
 
-- **Incremental: ₹3826584.55 per 1,000** (95% CI [1055507.16, 6478109.40], 2000 bootstrap resamples)
-- Gross recovered ₹/case — treated: ₹6216.31, holdout: ₹2389.73 (printed beside incremental deliberately — the gap is the argument, not the gross figure)
-- Gross recovery rate — treated: 22.9%, holdout: 8.2%
+- **Incremental: ₹2620395.34 per 1,000** (95% CI [-461418.96, 5249434.12], 2000 bootstrap resamples)
+- Gross recovered ₹/case — treated: ₹5586.82, holdout: ₹2966.42 (printed beside incremental deliberately — the gap is the argument, not the gross figure)
+- Gross recovery rate — treated: 22.0%, holdout: 9.6%
 
 ## AI quality — diagnosis on the AMBIGUOUS subset only
 
-- Ambiguous macro-F1: **0.335** (n=101). Overall accuracy across all cases is NOT reported — it is inflated by the CLEAN majority, which never reaches the model.
-  - TRANSIENT_INFRA: P=0.00 R=0.00 F1=0.00 support=1
-  - CUSTOMER_FIXABLE: P=0.45 R=0.45 F1=0.45 support=31
-  - INSTRUMENT_INVALID: P=0.67 R=0.12 F1=0.20 support=17
-  - TERMINAL: P=0.82 R=0.60 F1=0.69 support=52
+- Ambiguous macro-F1: **0.327** (n=101). Overall accuracy across all cases is NOT reported — it is inflated by the CLEAN majority, which never reaches the model.
+  - TRANSIENT_INFRA: P=0.04 R=1.00 F1=0.08 support=2
+  - CUSTOMER_FIXABLE: P=0.50 R=0.40 F1=0.44 support=25
+  - INSTRUMENT_INVALID: P=0.50 R=0.10 F1=0.17 support=20
+  - TERMINAL: P=0.84 R=0.48 F1=0.61 support=54
 
 ## Secondary metrics
 
-- Wasted-attempt rate: 9.5% (15/158 attempts landed on a case whose hidden true class is TERMINAL)
+- Wasted-attempt rate: 11.0% (18/164 attempts landed on a case whose hidden true class is TERMINAL)
 - Retries deferred past downtime end (rule DOWNTIME_DEFER fired): 0
-- Cases abandoned early, zero attempts spent: 69
+- Cases abandoned early, zero attempts spent: 63
 - Holdout cases closed without action (HOLDOUT_GUARD): 73
 
 ## Safety invariants — build-breaking, not descriptive
 
 - Holdout contamination: **0** (target: 0)
 - Attempt-cap breaches: **0** (target: 0)
-- Policy veto rate: **23.7%** (49/207 RETRY proposals denied) — target band [5%, 40%]: near 0 means the gate is decorative, near 100% means the model is useless
+- Policy veto rate: **24.4%** (53/217 RETRY proposals denied) — target band [5%, 40%]: near 0 means the gate is decorative, near 100% means the model is useless
 - Audit chain verifies: **True**
 - Denormalised counters match audit-log replay: **True**
 
@@ -37,4 +37,5 @@ n=300 · generator=0.2.0 · times_scored=100 · n_treated=227 · n_holdout=73
 
 ## Adverse findings
 
+- Incremental ₹ CI includes zero (or is negative) at this sample size — the lift is not statistically distinguishable from noise here. Expected at n=300 (Phase 1 dev corpus); the sealed n=1,000 test corpus (Phase 3) is powered for a ~10pp effect.
 - Zero retries were deferred by DOWNTIME_DEFER in this corpus. With only 300 cases and the S1 (realistic) downtime rate, low or zero overlap between generated failures and generated downtime windows is expected, not necessarily a bug — `make demo` demonstrates the mechanism directly on hand-built cases. A burst scenario (S2, higher downtime_rate) is needed before this corpus can support any claim about the downtime mechanism's contribution.

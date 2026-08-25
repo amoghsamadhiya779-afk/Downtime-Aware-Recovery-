@@ -16,7 +16,7 @@ eval:
 	$(PY) -m evalharness.run
 
 benchmark:
-	$(PY) scripts/benchmark.py
+	$(PY) scripts/build_comparison.py
 
 demo:
 	$(PY) scripts/demo.py
