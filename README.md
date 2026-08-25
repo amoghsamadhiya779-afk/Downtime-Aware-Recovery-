@@ -114,19 +114,26 @@ The system enforces six core safety guarantees:
 
 The system is evaluated by replaying failure events against a hidden ground truth dataset containing organic recovery counterfactuals (`p_organic`).
 
-### Benchmark Results (Corpus: dev, Seed: 42, n=300 cases)
+### Benchmark Results (Corpus: dev, Seed: 42, n=300 cases, Generator v0.2.0)
 
 The following metrics are generated directly by `evalharness.run`:
 
 | Metric | Measured Value | Notes |
 | :--- | :--- | :--- |
-| **Incremental Value** | **₹5,266,944.63 per 1,000 cases** | 95% Bootstrap CI: [₹2,236,886.14, ₹7,998,325.23] |
-| **Gross Recovery (Treated)** | **29.5%** | 67 of 227 treated cases recovered |
-| **Gross Recovery (Holdout)** | **6.8%** | 5 of 73 holdout cases recovered organically |
+| **Incremental Value** | **₹4,518,252.78 per 1,000 cases** | 95% Bootstrap CI: [₹2,379,261.71, ₹6,561,229.09] (2,000 resamples) |
+| **Gross Recovery (Treated)** | **23.3%** | Treated recovery rate (vs 6.8% organic holdout rate) |
+| **Ambiguous Macro-F1** | **0.380** | Scored on 97 ambiguous cases (CLEAN taxonomy cases excluded) |
+| **Wasted Attempt Rate** | **10.4%** | 17 of 164 attempts landed on unrecoverable terminal failures |
 | **Holdout Contamination** | **0 cases** | Zero holdout transactions were acted upon |
 | **Attempt Cap Breaches** | **0 cases** | Zero transactions exceeded retry limits |
-| **Policy Veto Rate** | **21.7%** | 50 of 230 proposals vetoed by safety rules |
+| **Policy Veto Rate** | **24.8%** | 54 of 218 retry proposals vetoed by safety rules |
 | **Audit Chain Integrity** | **Verified (True)** | SHA-256 cryptographic chain validated across all events |
+
+### Adverse Findings & Multi-Scenario Insights
+
+- **Zero S1 Downtime Deferrals**: In Scenario S1 (realistic baseline, 5% downtime), zero retries were deferred by `DOWNTIME_DEFER` due to low failure-outage overlap at n=300 cases.
+- **Scenario S2 Burst Outage Validation**: In Scenario S2 (40% downtime rate), `DOWNTIME_DEFER` actively deferred 40 retries past outage resolution, raising ambiguous macro-F1 to **0.508**.
+- **Scenario S3 Negative Control**: In Scenario S3 (0% downtime), `DOWNTIME_DEFER` fired exactly 0 times, confirming no spurious downtime lift when outages are absent.
 
 ---
 
@@ -170,7 +177,7 @@ cp .env.example .env
 # 5. Generate reproducible dataset (Seed 42 -> 300 cases)
 python scripts/gen.py
 
-# 6. Run automated test suite (313 tests)
+# 6. Run automated test suite (326 tests)
 pytest -v
 ```
 
@@ -217,5 +224,6 @@ Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, han
 ## 10. Limitations
 
 1. **Synthetic Response Model**: In the current development evaluation corpus, bank recovery probabilities during downtime are modeled using synthetic distributions based on the failure taxonomy.
-2. **Baseline Stub Diagnostic Accuracy**: The default offline stub (`StubDiagnosis`) scores a macro-F1 of 0.151 on ambiguous errors because it consistently predicts `TRANSIENT_INFRA`. Connecting live LLM providers (`ClaudeDiagnosis` or `GroqDiagnosis`) with active API keys is required for full diagnostic reasoning.
+2. **Baseline Diagnostic Heuristics**: The default offline stub (`StubDiagnosis`) scores a macro-F1 of 0.380 on ambiguous errors using feature-conditioned branching. Connecting live LLM providers (`ClaudeDiagnosis` or `GroqDiagnosis`) with active API keys is required for full diagnostic reasoning.
 3. **Fixed Attempt Caps**: Attempt caps are currently configured globally per payment method rather than dynamically adjusted per merchant risk tier or specific issuing bank agreements.
+

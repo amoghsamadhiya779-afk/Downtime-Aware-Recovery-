@@ -239,8 +239,7 @@ def run_all_scenarios(
         gt_path = DATA_DIR / f"dev{suffix}_ground_truth.jsonl"
         scenario_out = EVAL_DIR / f"report_{s.lower()}.md"
 
-        if not db_path.exists() or not gt_path.exists():
-            generate_scenario(s, seed=seed)
+        generate_scenario(s, seed=seed)
 
         rep = run(
             db_path,
