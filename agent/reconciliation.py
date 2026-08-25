@@ -17,11 +17,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime
 
 from agent.audit import append
+from agent.logger import get_logger, log_context
 from agent.models import ActionOutcome, CaseState
 from agent.state import get_case, transition
+
+logger = get_logger("agent.reconciliation")
 
 
 def find_uncertain_cases(conn: sqlite3.Connection) -> list[dict]:
@@ -89,76 +93,102 @@ def reconcile(
     ReconciliationError
         If the case is not in QUARANTINED state, or was not uncertain.
     """
-    # --- guard: case must be QUARANTINED ---
-    row = get_case(conn, case_id)
-    if CaseState(row["state"]) is not CaseState.QUARANTINED:
-        raise ReconciliationError(
-            f"case {case_id} is in state {row['state']}, not QUARANTINED"
+    t0 = time.perf_counter()
+    with log_context(case_id=case_id):
+        logger.log_event(
+            "reconciliation.started",
+            actual_outcome=actual_outcome.value if actual_outcome else None,
+        )
+        # --- guard: case must be QUARANTINED ---
+        row = get_case(conn, case_id)
+        if CaseState(row["state"]) is not CaseState.QUARANTINED:
+            logger.log_event(
+                "reconciliation.error",
+                level="error",
+                reason="not_quarantined",
+                current_state=row["state"],
+            )
+            raise ReconciliationError(
+                f"case {case_id} is in state {row['state']}, not QUARANTINED"
+            )
+
+        # --- guard: case must have an unresolved ACTION_UNCERTAIN event ---
+        uncertain_event = conn.execute(
+            """
+            SELECT ae.seq,
+                   json_extract(ae.payload, '$.idempotency_key') AS idempotency_key
+              FROM audit_events ae
+             WHERE ae.case_id = ?
+               AND ae.event_type = 'ACTION_UNCERTAIN'
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM audit_events later
+                    WHERE later.case_id = ae.case_id
+                      AND later.event_type = 'RECONCILIATION_RESOLVED'
+                      AND later.seq > ae.seq
+               )
+             ORDER BY ae.seq DESC
+             LIMIT 1
+            """,
+            (case_id,),
+        ).fetchone()
+        if uncertain_event is None:
+            logger.log_event(
+                "reconciliation.error",
+                level="error",
+                reason="no_unresolved_uncertain_event",
+            )
+            raise ReconciliationError(
+                f"case {case_id} has no unresolved ACTION_UNCERTAIN event"
+            )
+
+        # --- determine target state ---
+        if actual_outcome is ActionOutcome.SUCCEEDED:
+            target = "RECOVERED"
+            increment = True
+        elif actual_outcome is ActionOutcome.FAILED:
+            target = "FAILED_ATTEMPT"
+            increment = True
+        elif actual_outcome is None:
+            # Action never ran — back to DIAGNOSED for reprocessing.
+            target = "DIAGNOSED"
+            increment = False
+        else:
+            raise ReconciliationError(f"unexpected actual_outcome: {actual_outcome}")
+
+        # --- transition ---
+        transition(conn, case_id, target, increment_attempt=increment, last_attempt_at=ts if increment else None)
+
+        # --- audit ---
+        append(
+            conn,
+            case_id=case_id,
+            actor="reconciliation",
+            event_type="RECONCILIATION_RESOLVED",
+            payload={
+                "actual_outcome": actual_outcome.value if actual_outcome else None,
+                "target_state": target,
+                "idempotency_key": uncertain_event["idempotency_key"],
+                "attempt_counted": increment,
+            },
+            ts=ts,
+        )
+        append(
+            conn,
+            case_id=case_id,
+            actor="reconciliation",
+            event_type="STATE_TRANSITION",
+            payload={"to": target, "reason": f"reconciled: {actual_outcome.value if actual_outcome else 'never_ran'}"},
+            ts=ts,
         )
 
-    # --- guard: case must have an unresolved ACTION_UNCERTAIN event ---
-    uncertain_event = conn.execute(
-        """
-        SELECT ae.seq,
-               json_extract(ae.payload, '$.idempotency_key') AS idempotency_key
-          FROM audit_events ae
-         WHERE ae.case_id = ?
-           AND ae.event_type = 'ACTION_UNCERTAIN'
-           AND NOT EXISTS (
-               SELECT 1
-                 FROM audit_events later
-                WHERE later.case_id = ae.case_id
-                  AND later.event_type = 'RECONCILIATION_RESOLVED'
-                  AND later.seq > ae.seq
-           )
-         ORDER BY ae.seq DESC
-         LIMIT 1
-        """,
-        (case_id,),
-    ).fetchone()
-    if uncertain_event is None:
-        raise ReconciliationError(
-            f"case {case_id} has no unresolved ACTION_UNCERTAIN event"
+        latency_ms = (time.perf_counter() - t0) * 1000
+        logger.log_event(
+            "reconciliation.resolved",
+            latency_ms=latency_ms,
+            target_state=target,
+            actual_outcome=actual_outcome.value if actual_outcome else None,
+            attempt_counted=increment,
         )
 
-    # --- determine target state ---
-    if actual_outcome is ActionOutcome.SUCCEEDED:
-        target = "RECOVERED"
-        increment = True
-    elif actual_outcome is ActionOutcome.FAILED:
-        target = "FAILED_ATTEMPT"
-        increment = True
-    elif actual_outcome is None:
-        # Action never ran — back to DIAGNOSED for reprocessing.
-        target = "DIAGNOSED"
-        increment = False
-    else:
-        raise ReconciliationError(f"unexpected actual_outcome: {actual_outcome}")
-
-    # --- transition ---
-    transition(conn, case_id, target, increment_attempt=increment, last_attempt_at=ts if increment else None)
-
-    # --- audit ---
-    append(
-        conn,
-        case_id=case_id,
-        actor="reconciliation",
-        event_type="RECONCILIATION_RESOLVED",
-        payload={
-            "actual_outcome": actual_outcome.value if actual_outcome else None,
-            "target_state": target,
-            "idempotency_key": uncertain_event["idempotency_key"],
-            "attempt_counted": increment,
-        },
-        ts=ts,
-    )
-    append(
-        conn,
-        case_id=case_id,
-        actor="reconciliation",
-        event_type="STATE_TRANSITION",
-        payload={"to": target, "reason": f"reconciled: {actual_outcome.value if actual_outcome else 'never_ran'}"},
-        ts=ts,
-    )
-
-    return target
+        return target

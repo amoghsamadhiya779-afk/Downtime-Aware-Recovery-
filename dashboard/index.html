@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Recovery Control Plane | Executive Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="brand-badge">
+          <span class="pulse-dot"></span>
+          <span class="brand-name">Razorpay Recovery Agent</span>
+        </div>
+        <span class="header-separator">/</span>
+        <h1 class="header-title">Autonomous Control Plane</h1>
+      </div>
+      <div class="header-right">
+        <div class="audit-status-badge" id="chain-status-badge">
+          <svg class="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+          <span id="chain-status-text">Audit Chain Verified</span>
+        </div>
+        <button class="btn-refresh" id="btn-refresh" title="Refresh metrics and transactions">
+          <svg class="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="dashboard-main">
+      <!-- 7 Core Metric Cards -->
+      <section class="metrics-grid">
+        <!-- 1. Revenue at Risk -->
+        <div class="metric-card card-risk">
+          <div class="metric-header">
+            <span class="metric-label">Revenue at Risk</span>
+            <span class="metric-icon-wrap icon-risk">₹</span>
+          </div>
+          <div class="metric-value" id="val-revenue-at-risk">₹0.00</div>
+          <div class="metric-subtext">Total payment failure volume</div>
+        </div>
+
+        <!-- 2. Recovered Value -->
+        <div class="metric-card card-recovered">
+          <div class="metric-header">
+            <span class="metric-label">Recovered Value</span>
+            <span class="metric-icon-wrap icon-recovered">💎</span>
+          </div>
+          <div class="metric-value" id="val-recovered-value">₹0.00</div>
+          <div class="metric-subtext">Gross value saved via recoveries</div>
+        </div>
+
+        <!-- 3. Recovery Rate -->
+        <div class="metric-card card-rate">
+          <div class="metric-header">
+            <span class="metric-label">Recovery Rate</span>
+            <span class="metric-icon-wrap icon-rate">📈</span>
+          </div>
+          <div class="metric-value" id="val-recovery-rate">0.0%</div>
+          <div class="metric-subtext">Value-weighted recovery efficiency</div>
+        </div>
+
+        <!-- 4. Actions Executed -->
+        <div class="metric-card card-actions">
+          <div class="metric-header">
+            <span class="metric-label">Actions Executed</span>
+            <span class="metric-icon-wrap icon-actions">⚡</span>
+          </div>
+          <div class="metric-value" id="val-actions-executed">0</div>
+          <div class="metric-subtext">Dispatched retry attempts</div>
+        </div>
+
+        <!-- 5. Actions Blocked -->
+        <div class="metric-card card-blocked">
+          <div class="metric-header">
+            <span class="metric-label">Actions Blocked</span>
+            <span class="metric-icon-wrap icon-blocked">🛡️</span>
+          </div>
+          <div class="metric-value" id="val-actions-blocked">0</div>
+          <div class="metric-subtext">Zero-LLM policy denials & safeguards</div>
+        </div>
+
+        <!-- 6. AI Confidence -->
+        <div class="metric-card card-confidence">
+          <div class="metric-header">
+            <span class="metric-label">AI Confidence</span>
+            <span class="metric-icon-wrap icon-confidence">🧠</span>
+          </div>
+          <div class="metric-value" id="val-ai-confidence">0.0%</div>
+          <div class="metric-subtext">Mean diagnostic model certainty</div>
+        </div>
+
+        <!-- 7. Failure Rate -->
+        <div class="metric-card card-failure">
+          <div class="metric-header">
+            <span class="metric-label">Failure Rate</span>
+            <span class="metric-icon-wrap icon-failure">⚠️</span>
+          </div>
+          <div class="metric-value" id="val-failure-rate">0.0%</div>
+          <div class="metric-subtext">Unrecovered or abandoned rate</div>
+        </div>
+      </section>
+
+      <!-- Developer / Demo Controls -->
+      <section class="demo-controls-section">
+        <div class="demo-controls-header">
+          <div class="demo-controls-title-group">
+            <span class="pulse-dot-cyan"></span>
+            <h3 class="demo-controls-title">Developer & System Failure Mode Controls</h3>
+          </div>
+          <span class="demo-controls-caption">Triggers live backend execution, zero-LLM policy vetoes, fallback tiers, and SHA-256 audit hashing</span>
+        </div>
+        <div class="demo-buttons-grid">
+          <!-- 1. Duplicate Event -->
+          <button class="btn-demo btn-demo-dup" data-scenario="duplicate_event">
+            <div class="btn-demo-icon">🔄</div>
+            <div class="btn-demo-content">
+              <span class="btn-demo-name">Duplicate Event</span>
+              <span class="btn-demo-desc">Deduplication & Idempotent Replay</span>
+            </div>
+          </button>
+
+          <!-- 2. Invalid AI Output -->
+          <button class="btn-demo btn-demo-ai" data-scenario="invalid_ai_output">
+            <div class="btn-demo-icon">💥</div>
+            <div class="btn-demo-content">
+              <span class="btn-demo-name">Invalid AI Output</span>
+              <span class="btn-demo-desc">Schema Failure & Tier-3 Fail-Closed</span>
+            </div>
+          </button>
+
+          <!-- 3. Policy Rejection -->
+          <button class="btn-demo btn-demo-policy" data-scenario="policy_rejection">
+            <div class="btn-demo-icon">🛡️</div>
+            <div class="btn-demo-content">
+              <span class="btn-demo-name">Policy Rejection</span>
+              <span class="btn-demo-desc">Zero-LLM Gate Vetoes Adversarial AI</span>
+            </div>
+          </button>
+
+          <!-- 4. Execution Timeout -->
+          <button class="btn-demo btn-demo-timeout" data-scenario="execution_timeout">
+            <div class="btn-demo-icon">⏳</div>
+            <div class="btn-demo-content">
+              <span class="btn-demo-name">Execution Timeout</span>
+              <span class="btn-demo-desc">Gateway Timeout & Quarantine</span>
+            </div>
+          </button>
+        </div>
+      </section>
+
+      <!-- Transaction Ledger & Traceability -->
+      <section class="ledger-section">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">Transaction Ledger</h2>
+            <span class="count-badge" id="transaction-count">0 transactions</span>
+          </div>
+          <div class="filter-toolbar">
+            <!-- Search -->
+            <div class="search-input-wrap">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="M21 21l-4.35-4.35"/>
+              </svg>
+              <input type="text" id="input-search" placeholder="Search case ID, order ID...">
+            </div>
+
+            <!-- Filters -->
+            <div class="filter-group">
+              <select id="filter-cohort" class="filter-select">
+                <option value="ALL">All Cohorts</option>
+                <option value="TREATED">Treated</option>
+                <option value="HOLDOUT">Holdout</option>
+              </select>
+
+              <select id="filter-method" class="filter-select">
+                <option value="ALL">All Methods</option>
+                <option value="UPI">UPI</option>
+                <option value="CARD">Card</option>
+                <option value="NETBANKING">Netbanking</option>
+                <option value="EMANDATE">eMandate</option>
+              </select>
+
+              <select id="filter-state" class="filter-select">
+                <option value="ALL">All States</option>
+                <option value="RECOVERED">Recovered</option>
+                <option value="QUARANTINED">Quarantined</option>
+                <option value="ABANDONED">Abandoned</option>
+                <option value="HOLDOUT_CLOSED">Holdout Closed</option>
+                <option value="FAILED_ATTEMPT">Failed Attempt</option>
+                <option value="SCHEDULED">Scheduled</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Transactions Table -->
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Case / Order ID</th>
+                <th>Method</th>
+                <th>Amount</th>
+                <th>Cohort</th>
+                <th>Error Reason</th>
+                <th>AI Proposal</th>
+                <th>Policy Verdict</th>
+                <th>State</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+              <tr>
+                <td colspan="9" class="state-cell text-center">Loading transactions...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Transaction Detail Drawer -->
+    <aside class="trace-drawer" id="trace-drawer" aria-hidden="true">
+      <div class="drawer-overlay" id="drawer-overlay"></div>
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <div class="drawer-title-group">
+            <span class="drawer-subtitle">Transaction Traceability</span>
+            <h3 class="drawer-case-id" id="drawer-case-id">Case ID</h3>
+          </div>
+          <button class="drawer-close-btn" id="btn-close-drawer" aria-label="Close drawer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="drawer-meta-bar" id="drawer-meta-bar">
+          <!-- Populated by JS: Order ID, Amount, Method, State, Chain Valid -->
+        </div>
+
+        <!-- Drawer Navigation Tabs -->
+        <div class="drawer-tabs">
+          <button class="tab-btn active" id="tab-btn-journey" data-tab="journey">
+            <span class="tab-icon">⚡</span>
+            <span>9-Phase Journey</span>
+          </button>
+          <button class="tab-btn" id="tab-btn-audit" data-tab="audit">
+            <span class="tab-icon">📜</span>
+            <span>Audit Hash Trail</span>
+          </button>
+        </div>
+
+        <div class="drawer-body">
+          <!-- Tab 1: 9-Phase Journey Container -->
+          <div class="tab-content active" id="tab-content-journey">
+            <div class="pipeline-container" id="pipeline-container">
+              <!-- Rendered dynamically by app.js: 9 phases -->
+            </div>
+          </div>
+
+          <!-- Tab 2: Cryptographic Audit Trail Container -->
+          <div class="tab-content" id="tab-content-audit">
+            <h4 class="timeline-heading">Cryptographic Audit Trail</h4>
+            <div class="timeline-container" id="timeline-container">
+              <!-- Timeline items rendered dynamically -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
