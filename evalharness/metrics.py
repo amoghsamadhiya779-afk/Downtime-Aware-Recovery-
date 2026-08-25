@@ -206,7 +206,7 @@ def safety_invariants(conn: sqlite3.Connection, rules: Rules) -> dict:
     )
 
 
-def build_report(
+def compute_all_metrics(
     conn: sqlite3.Connection,
     ground_truth: dict[str, GroundTruth],
     *,
@@ -215,7 +215,7 @@ def build_report(
     chain_ok: bool,
     counters_ok: bool,
     rules: Rules,
-) -> str:
+) -> dict:
     outcomes = compute_outcomes(conn, ground_truth, seed)
     treated = [(o["amount_paise"], o["recovered"]) for o in outcomes.values() if o["cohort"] == "TREATED"]
     holdout = [(o["amount_paise"], o["recovered"]) for o in outcomes.values() if o["cohort"] == "HOLDOUT"]
@@ -235,6 +235,69 @@ def build_report(
     ).fetchone()["c"]
     n_abandoned = sum(1 for o in outcomes.values() if o["state"] == "ABANDONED")
     n_holdout_closed = sum(1 for o in outcomes.values() if o["state"] == "HOLDOUT_CLOSED")
+
+    return {
+        "manifest": {
+            "corpus": manifest.corpus,
+            "seed": seed,
+            "scenario": manifest.scenario_id,
+            "n": manifest.n,
+            "generator_version": manifest.generator_version,
+        },
+        "incremental": inc,
+        "gross": {
+            "treated_rate": gross_rate_treated,
+            "holdout_rate": gross_rate_holdout,
+        },
+        "ai": {
+            "macro_f1": macro_f1_score,
+            "n_ambiguous": n_ambiguous,
+            "per_class": per_class,
+        },
+        "secondary": {
+            "wasted_attempt_rate": wasted_rate,
+            "wasted_n": wasted_n,
+            "total_attempts": total_attempts,
+            "n_deferred": n_deferred,
+            "n_abandoned": n_abandoned,
+            "n_holdout_closed": n_holdout_closed,
+        },
+        "safety": safety,
+        "system": {
+            "chain_ok": chain_ok,
+            "counters_ok": counters_ok,
+            "unverified_rules": unverified,
+        }
+    }
+
+
+def build_report(
+    conn: sqlite3.Connection,
+    ground_truth: dict[str, GroundTruth],
+    *,
+    seed: int,
+    manifest: BatchManifest,
+    chain_ok: bool,
+    counters_ok: bool,
+    rules: Rules,
+) -> str:
+    m = compute_all_metrics(
+        conn, ground_truth, seed=seed, manifest=manifest, chain_ok=chain_ok, counters_ok=counters_ok, rules=rules
+    )
+    inc = m["incremental"]
+    gross_rate_treated = m["gross"]["treated_rate"]
+    gross_rate_holdout = m["gross"]["holdout_rate"]
+    macro_f1_score = m["ai"]["macro_f1"]
+    per_class = m["ai"]["per_class"]
+    n_ambiguous = m["ai"]["n_ambiguous"]
+    wasted_rate = m["secondary"]["wasted_attempt_rate"]
+    wasted_n = m["secondary"]["wasted_n"]
+    total_attempts = m["secondary"]["total_attempts"]
+    safety = m["safety"]
+    unverified = m["system"]["unverified_rules"]
+    n_deferred = m["secondary"]["n_deferred"]
+    n_abandoned = m["secondary"]["n_abandoned"]
+    n_holdout_closed = m["secondary"]["n_holdout_closed"]
 
     lines: list[str] = []
     lines.append(f"# Evaluation Report — corpus `{manifest.corpus}` seed={seed} scenario={manifest.scenario_id}")
