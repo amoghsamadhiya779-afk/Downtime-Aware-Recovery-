@@ -96,7 +96,7 @@ END;
 
 
 def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     return conn

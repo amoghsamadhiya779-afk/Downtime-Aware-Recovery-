@@ -14,13 +14,15 @@ See also agent/diagnosis/groq_diagnosis.py — a free-tier alternative behind th
 same DiagnosisPort interface (DECISIONS.md ADR-011).
 """
 
-from __future__ import annotations
-
 import os
+import time
 
 from agent.diagnosis import prompting
 from agent.diagnosis.port import DiagnosisInput
+from agent.logger import get_logger
 from agent.models import DiagnosisProposal
+
+logger = get_logger("agent.diagnosis.claude")
 
 MODEL = "claude-sonnet-5"
 TIMEOUT_SECONDS = 8
@@ -51,14 +53,46 @@ class ClaudeDiagnosis:
 
         last_error: str | None = None
         for attempt in range(2):  # tier 1: try, then one repair
+            t0 = time.perf_counter()
             try:
                 raw = self._call(prompt if attempt == 0 else prompt + prompting.REPAIR_SUFFIX)
-                return prompting.validate(raw, fields)
+                latency_ms = (time.perf_counter() - t0) * 1000
+                proposal = prompting.validate(raw, fields)
+                logger.log_event(
+                    "diagnosis.llm.completed",
+                    model=MODEL,
+                    attempt=attempt + 1,
+                    latency_ms=latency_ms,
+                    recoverability=proposal.recoverability.value,
+                    confidence=proposal.confidence,
+                )
+                return proposal
             except Exception as e:
+                latency_ms = (time.perf_counter() - t0) * 1000
                 last_error = f"{type(e).__name__}: {e}"
+                logger.log_event(
+                    "diagnosis.llm.attempt_failed",
+                    level="warning",
+                    model=MODEL,
+                    attempt=attempt + 1,
+                    latency_ms=latency_ms,
+                    error=last_error,
+                )
                 continue
 
         fallback = prompting.tier2_fallback(inp, last_error)
         if fallback is not None:
+            logger.log_event(
+                "diagnosis.fallback.tier2",
+                fallback_tier=2,
+                recoverability=fallback.recoverability.value,
+                last_error=last_error,
+            )
             return fallback
+        logger.log_event(
+            "diagnosis.fallback.tier3",
+            level="warning",
+            fallback_tier=3,
+            last_error=last_error,
+        )
         return prompting.tier3_fallback(inp, last_error)

@@ -27,6 +27,7 @@ from agent.executors.contracts import (
     build_retry_input,
     check_executable_state,
 )
+from agent.logger import get_logger
 from agent.models import (
     Action,
     ActionOutcome,
@@ -37,6 +38,8 @@ from agent.models import (
     Verdict,
     idempotency_key,
 )
+
+logger = get_logger("agent.executor.simulated")
 
 # Re-exported for callers that imported it from here before it moved to
 # agent/models.py (where the policy engine can also reach it without importing
@@ -98,6 +101,11 @@ class SimulatedExecutor:
             (key,),
         ).fetchone()
         if existing is not None and existing["executed_at"] is not None:
+            logger.log_event(
+                "execution.replayed",
+                idempotency_key=key,
+                succeeded=bool(existing["succeeded"]),
+            )
             return ActionResult(
                 case_id=action_input.case_id,
                 action=Action.RETRY,
@@ -116,6 +124,11 @@ class SimulatedExecutor:
         # rather than an idempotent no-op. Retryable: once the in-flight attempt
         # completes, a later delivery lands on the replay path above.
         if existing is not None:
+            logger.log_event(
+                "execution.duplicate_in_flight",
+                level="warning",
+                idempotency_key=key,
+            )
             raise ActionRefused(
                 ActionErrorCode.DUPLICATE_IN_FLIGHT,
                 f"action {key[:12]}… is already dispatched and has not completed",
