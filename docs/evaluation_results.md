@@ -1,6 +1,10 @@
-# Evaluation Results
+# [SUPERSEDED] Evaluation Results — Pre-Fix Stub Benchmark Run
 
-This document presents the complete evaluation results for the Razorpay Payment Recovery AI agent, capturing business, AI, and safety metrics alongside the adversarial failure-test results.
+> **Status: SUPERSEDED (Historical Pre-Fix Benchmark)**  
+> This document records an earlier pre-fix benchmarking pass using the placeholder `StubDiagnosis` before feature-conditioned ground truth (ADR-021) and intelligent diagnostic branching were implemented.
+> For current multi-scenario evaluation results, refer to [`eval/report.md`](../eval/report.md).
+
+This document presents the historical evaluation results for the Razorpay Payment Recovery AI agent, capturing business, AI, and safety metrics alongside the adversarial failure-test results.
 
 ## 1. Dataset Size
 * **Total Records (n)**: 1,000

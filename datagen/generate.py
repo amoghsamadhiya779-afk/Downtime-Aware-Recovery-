@@ -231,7 +231,7 @@ def generate(
     n: int,
     corpus: str,
     scenario_id: str = "S1",
-    downtime_rate: float = 0.05,
+    downtime_rate: float | None = None,
     ambiguous_fraction: float = 0.30,
     terminal_floor: float = 0.15,
     start: datetime | None = None,
@@ -241,27 +241,36 @@ def generate(
     rng = random.Random(seed)
     start = start or datetime(2026, 8, 1, tzinfo=timezone.utc)
 
+    if downtime_rate is None:
+        if scenario_id == "S2":
+            downtime_rate = 0.40  # S2 burst: elevated outage rate
+        elif scenario_id == "S3":
+            downtime_rate = 0.0   # S3 negative control: zero downtime
+        else:
+            downtime_rate = 0.05  # S1 baseline realistic downtime
+
     # A handful of downtime windows at roughly the configured affected-record rate
-    # (S1 "realistic rate" per the plan; S2 burst uses a higher downtime_rate).
+    # (S1 "realistic rate" per the plan; S2 burst uses a higher downtime_rate; S3 has 0).
     windows: list[DowntimeWindow] = []
-    n_windows = max(1, round(n * downtime_rate / 8))  # ~8 records/window on average
-    for i in range(n_windows):
-        method = rng.choice(METHODS)
-        instrument = rng.choice(_INSTRUMENTS[method])
-        begin = start + timedelta(hours=rng.randint(0, 24 * 20))
-        end = begin + timedelta(hours=rng.randint(1, 6)) if rng.random() < 0.7 else None
-        windows.append(
-            DowntimeWindow(
-                id=f"down_{corpus}_{seed}_{i:03d}",
-                method=method,
-                instrument=instrument,
-                begin=begin,
-                end=end,
-                status="started",
-                scheduled=rng.random() < 0.3,
-                severity=rng.choice(["low", "medium", "high"]),
+    if downtime_rate > 0.0:
+        n_windows = max(1, round(n * downtime_rate / 8))
+        for i in range(n_windows):
+            method = rng.choice(METHODS)
+            instrument = rng.choice(_INSTRUMENTS[method])
+            begin = start + timedelta(hours=rng.randint(0, 24 * 20))
+            end = begin + timedelta(hours=rng.randint(2, 12 if scenario_id == "S2" else 6)) if rng.random() < 0.8 else None
+            windows.append(
+                DowntimeWindow(
+                    id=f"down_{corpus}_{seed}_{i:03d}",
+                    method=method,
+                    instrument=instrument,
+                    begin=begin,
+                    end=end,
+                    status="started",
+                    scheduled=rng.random() < 0.3,
+                    severity=rng.choice(["low", "medium", "high"]),
+                )
             )
-        )
 
     records: list[GeneratedRecord] = []
     n_customers = max(1, n // 3)

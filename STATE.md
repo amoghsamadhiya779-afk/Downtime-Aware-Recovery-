@@ -16,7 +16,7 @@ file answers only "where are we now and what's next."
 | **Deadline** | 5 Sep 2026 · **11 days left** |
 | **Track** | 03 — AI Revenue Recovery |
 | **Phase** | 1 complete and hardened. Phase 2 not started. |
-| **Tests** | **321 passing**, 16 files |
+| **Tests** | **326 passing**, 18 files |
 | **ADRs** | 21 |
 | **Branch** | `policy-engine-v2-and-baseline` (1 commit pushed; PR not opened — `gh` not installed) |
 | **Uncommitted** | Yes — ADR-018/019/020/021 work (contracts, executor, state machine, feature-conditioned labels) |
