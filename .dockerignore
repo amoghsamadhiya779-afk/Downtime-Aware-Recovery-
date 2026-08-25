@@ -1,0 +1,27 @@
+# Git and IDE
+.git
+.gitignore
+.agents
+.gemini
+.vscode
+.idea
+
+# Python virtual environment and bytecode
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Local secrets and temporary data
+.env
+*.log
+scratch/

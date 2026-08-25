@@ -59,6 +59,17 @@ def test_http_get_static_assets(server):
             assert len(response.read()) > 0
 
 
+def test_http_get_health_api(server):
+    url = f"{server}/api/health"
+    with urllib.request.urlopen(url) as response:
+        assert response.status == 200
+        data = json.loads(response.read().decode("utf-8"))
+        assert data["status"] == "healthy"
+        assert data["database"] == "connected"
+        assert data["audit_chain_valid"] is True
+        assert "timestamp" in data
+
+
 def test_http_get_metrics_api(server):
     url = f"{server}/api/metrics"
     with urllib.request.urlopen(url) as response:

@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Recovery Control Plane | Executive Dashboard</title>
+  <title>Razorpay Payment Recovery Control Plane | Executive Dashboard</title>
+  <meta name="description" content="Autonomous downtime-aware payment recovery control plane with zero-LLM policy engine and cryptographic audit chain.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,25 +16,39 @@
     <header class="app-header">
       <div class="header-left">
         <div class="brand-badge">
-          <span class="pulse-dot"></span>
-          <span class="brand-name">Razorpay Recovery Agent</span>
+          <div class="razorpay-logo-symbol">
+            <svg viewBox="0 0 24 24" fill="none" class="rzp-icon">
+              <path d="M14.5 3L6.5 14H12L9.5 21L17.5 10H12L14.5 3Z" fill="currentColor"/>
+            </svg>
+          </div>
+          <div class="brand-text-wrap">
+            <span class="brand-title">Razorpay Recovery</span>
+            <span class="brand-badge-tag">Control Plane</span>
+          </div>
         </div>
         <span class="header-separator">/</span>
-        <h1 class="header-title">Autonomous Control Plane</h1>
+        <div class="header-context">
+          <span class="header-subtitle">Track 03 — AI Revenue Recovery</span>
+        </div>
       </div>
       <div class="header-right">
-        <div class="audit-status-badge" id="chain-status-badge">
+        <div class="health-status-badge" id="system-health-badge" title="Live system status">
+          <span class="status-pulse-dot"></span>
+          <span id="system-health-text">System Healthy</span>
+        </div>
+        <div class="audit-status-badge" id="chain-status-badge" title="Cryptographic SHA-256 Audit Integrity">
           <svg class="icon-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             <path d="M9 12l2 2 4-4"/>
           </svg>
           <span id="chain-status-text">Audit Chain Verified</span>
         </div>
-        <button class="btn-refresh" id="btn-refresh" title="Refresh metrics and transactions">
+        <button class="btn-refresh" id="btn-refresh" title="Refresh metrics and transactions (Shortcut: R)">
           <svg class="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
           </svg>
           <span>Refresh</span>
+          <kbd class="header-kbd">R</kbd>
         </button>
       </div>
     </header>
@@ -41,121 +56,159 @@
     <!-- Main Container -->
     <main class="dashboard-main">
       <!-- 7 Core Metric Cards -->
-      <section class="metrics-grid">
+      <section class="metrics-grid" id="metrics-grid">
         <!-- 1. Revenue at Risk -->
-        <div class="metric-card card-risk">
+        <div class="metric-card card-risk" id="card-revenue-at-risk">
           <div class="metric-header">
             <span class="metric-label">Revenue at Risk</span>
             <span class="metric-icon-wrap icon-risk">₹</span>
           </div>
-          <div class="metric-value" id="val-revenue-at-risk">₹0.00</div>
-          <div class="metric-subtext">Total payment failure volume</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-revenue-at-risk">₹0.00</div>
+          </div>
+          <div class="metric-subtext" id="sub-revenue-at-risk">Total failure volume across cohorts</div>
         </div>
 
         <!-- 2. Recovered Value -->
-        <div class="metric-card card-recovered">
+        <div class="metric-card card-recovered" id="card-recovered-value">
           <div class="metric-header">
             <span class="metric-label">Recovered Value</span>
             <span class="metric-icon-wrap icon-recovered">💎</span>
           </div>
-          <div class="metric-value" id="val-recovered-value">₹0.00</div>
-          <div class="metric-subtext">Gross value saved via recoveries</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-recovered-value">₹0.00</div>
+          </div>
+          <div class="metric-subtext" id="sub-recovered-value">Gross value saved via recoveries</div>
         </div>
 
         <!-- 3. Recovery Rate -->
-        <div class="metric-card card-rate">
+        <div class="metric-card card-rate" id="card-recovery-rate">
           <div class="metric-header">
             <span class="metric-label">Recovery Rate</span>
             <span class="metric-icon-wrap icon-rate">📈</span>
           </div>
-          <div class="metric-value" id="val-recovery-rate">0.0%</div>
-          <div class="metric-subtext">Value-weighted recovery efficiency</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-recovery-rate">0.0%</div>
+            <span class="lift-pill" id="val-lift-pill">+0.0% vs holdout</span>
+          </div>
+          <div class="metric-subtext" id="sub-recovery-rate">Value-weighted recovery efficiency</div>
         </div>
 
         <!-- 4. Actions Executed -->
-        <div class="metric-card card-actions">
+        <div class="metric-card card-actions" id="card-actions-executed">
           <div class="metric-header">
             <span class="metric-label">Actions Executed</span>
             <span class="metric-icon-wrap icon-actions">⚡</span>
           </div>
-          <div class="metric-value" id="val-actions-executed">0</div>
-          <div class="metric-subtext">Dispatched retry attempts</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-actions-executed">0</div>
+          </div>
+          <div class="metric-subtext" id="sub-actions-executed">Dispatched retry attempts</div>
         </div>
 
         <!-- 5. Actions Blocked -->
-        <div class="metric-card card-blocked">
+        <div class="metric-card card-blocked" id="card-actions-blocked">
           <div class="metric-header">
             <span class="metric-label">Actions Blocked</span>
             <span class="metric-icon-wrap icon-blocked">🛡️</span>
           </div>
-          <div class="metric-value" id="val-actions-blocked">0</div>
-          <div class="metric-subtext">Zero-LLM policy denials & safeguards</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-actions-blocked">0</div>
+          </div>
+          <div class="metric-subtext" id="sub-actions-blocked">Zero-LLM policy denials & safeguards</div>
         </div>
 
         <!-- 6. AI Confidence -->
-        <div class="metric-card card-confidence">
+        <div class="metric-card card-confidence" id="card-ai-confidence">
           <div class="metric-header">
             <span class="metric-label">AI Confidence</span>
             <span class="metric-icon-wrap icon-confidence">🧠</span>
           </div>
-          <div class="metric-value" id="val-ai-confidence">0.0%</div>
-          <div class="metric-subtext">Mean diagnostic model certainty</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-ai-confidence">0.0%</div>
+          </div>
+          <div class="metric-subtext" id="sub-ai-confidence">Mean diagnostic model certainty</div>
         </div>
 
         <!-- 7. Failure Rate -->
-        <div class="metric-card card-failure">
+        <div class="metric-card card-failure" id="card-failure-rate">
           <div class="metric-header">
             <span class="metric-label">Failure Rate</span>
             <span class="metric-icon-wrap icon-failure">⚠️</span>
           </div>
-          <div class="metric-value" id="val-failure-rate">0.0%</div>
-          <div class="metric-subtext">Unrecovered or abandoned rate</div>
+          <div class="metric-value-wrap">
+            <div class="metric-value" id="val-failure-rate">0.0%</div>
+          </div>
+          <div class="metric-subtext" id="sub-failure-rate">Unrecovered or abandoned rate</div>
         </div>
       </section>
 
-      <!-- Developer / Demo Controls -->
+      <!-- Developer / Demo Failure Mode Controls -->
       <section class="demo-controls-section">
         <div class="demo-controls-header">
           <div class="demo-controls-title-group">
-            <span class="pulse-dot-cyan"></span>
-            <h3 class="demo-controls-title">Developer & System Failure Mode Controls</h3>
+            <div class="terminal-icon-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-terminal">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+            </div>
+            <div>
+              <h3 class="demo-controls-title">Developer & Failure Mode Live Controls</h3>
+              <p class="demo-controls-caption">Dispatches live end-to-end transactions through real state transitions, zero-LLM policy gates, and SHA-256 audit trails</p>
+            </div>
           </div>
-          <span class="demo-controls-caption">Triggers live backend execution, zero-LLM policy vetoes, fallback tiers, and SHA-256 audit hashing</span>
         </div>
         <div class="demo-buttons-grid">
           <!-- 1. Duplicate Event -->
-          <button class="btn-demo btn-demo-dup" data-scenario="duplicate_event">
+          <button class="btn-demo btn-demo-dup" data-scenario="duplicate_event" id="btn-demo-duplicate">
+            <div class="btn-demo-indicator"></div>
             <div class="btn-demo-icon">🔄</div>
             <div class="btn-demo-content">
-              <span class="btn-demo-name">Duplicate Event</span>
-              <span class="btn-demo-desc">Deduplication & Idempotent Replay</span>
+              <div class="btn-demo-top">
+                <span class="btn-demo-name">Duplicate Event</span>
+                <span class="btn-demo-badge badge-dup">Idempotency</span>
+              </div>
+              <span class="btn-demo-desc">Deduplication check & idempotent replay (no double charge)</span>
             </div>
           </button>
 
           <!-- 2. Invalid AI Output -->
-          <button class="btn-demo btn-demo-ai" data-scenario="invalid_ai_output">
+          <button class="btn-demo btn-demo-ai" data-scenario="invalid_ai_output" id="btn-demo-invalid-ai">
+            <div class="btn-demo-indicator"></div>
             <div class="btn-demo-icon">💥</div>
             <div class="btn-demo-content">
-              <span class="btn-demo-name">Invalid AI Output</span>
-              <span class="btn-demo-desc">Schema Failure & Tier-3 Fail-Closed</span>
+              <div class="btn-demo-top">
+                <span class="btn-demo-name">Invalid AI Output</span>
+                <span class="btn-demo-badge badge-ai">Fail-Closed</span>
+              </div>
+              <span class="btn-demo-desc">Intercepts malformed LLM response & falls back to Tier 3 UNKNOWN</span>
             </div>
           </button>
 
           <!-- 3. Policy Rejection -->
-          <button class="btn-demo btn-demo-policy" data-scenario="policy_rejection">
+          <button class="btn-demo btn-demo-policy" data-scenario="policy_rejection" id="btn-demo-policy-rejection">
+            <div class="btn-demo-indicator"></div>
             <div class="btn-demo-icon">🛡️</div>
             <div class="btn-demo-content">
-              <span class="btn-demo-name">Policy Rejection</span>
-              <span class="btn-demo-desc">Zero-LLM Gate Vetoes Adversarial AI</span>
+              <div class="btn-demo-top">
+                <span class="btn-demo-name">Policy Rejection</span>
+                <span class="btn-demo-badge badge-policy">Zero-LLM Gate</span>
+              </div>
+              <span class="btn-demo-desc">Zero-LLM Engine vetoes 100% confidence adversarial retry</span>
             </div>
           </button>
 
           <!-- 4. Execution Timeout -->
-          <button class="btn-demo btn-demo-timeout" data-scenario="execution_timeout">
+          <button class="btn-demo btn-demo-timeout" data-scenario="execution_timeout" id="btn-demo-timeout">
+            <div class="btn-demo-indicator"></div>
             <div class="btn-demo-icon">⏳</div>
             <div class="btn-demo-content">
-              <span class="btn-demo-name">Execution Timeout</span>
-              <span class="btn-demo-desc">Gateway Timeout & Quarantine</span>
+              <div class="btn-demo-top">
+                <span class="btn-demo-name">Execution Timeout</span>
+                <span class="btn-demo-badge badge-timeout">Quarantine</span>
+              </div>
+              <span class="btn-demo-desc">Gateway timeout encountered; isolates into QUARANTINED state</span>
             </div>
           </button>
         </div>
@@ -175,18 +228,19 @@
                 <circle cx="11" cy="11" r="8"/>
                 <path d="M21 21l-4.35-4.35"/>
               </svg>
-              <input type="text" id="input-search" placeholder="Search case ID, order ID...">
+              <input type="text" id="input-search" placeholder="Search case ID, order ID, reason... (Press '/' to focus)" aria-label="Search transactions">
+              <kbd class="search-kbd">/</kbd>
             </div>
 
             <!-- Filters -->
             <div class="filter-group">
-              <select id="filter-cohort" class="filter-select">
+              <select id="filter-cohort" class="filter-select" aria-label="Filter by cohort">
                 <option value="ALL">All Cohorts</option>
                 <option value="TREATED">Treated</option>
                 <option value="HOLDOUT">Holdout</option>
               </select>
 
-              <select id="filter-method" class="filter-select">
+              <select id="filter-method" class="filter-select" aria-label="Filter by payment method">
                 <option value="ALL">All Methods</option>
                 <option value="UPI">UPI</option>
                 <option value="CARD">Card</option>
@@ -194,7 +248,7 @@
                 <option value="EMANDATE">eMandate</option>
               </select>
 
-              <select id="filter-state" class="filter-select">
+              <select id="filter-state" class="filter-select" aria-label="Filter by state">
                 <option value="ALL">All States</option>
                 <option value="RECOVERED">Recovered</option>
                 <option value="QUARANTINED">Quarantined</option>
@@ -202,6 +256,12 @@
                 <option value="HOLDOUT_CLOSED">Holdout Closed</option>
                 <option value="FAILED_ATTEMPT">Failed Attempt</option>
                 <option value="SCHEDULED">Scheduled</option>
+              </select>
+
+              <select id="filter-limit" class="filter-select select-limit" aria-label="Rows per page">
+                <option value="25">25 rows</option>
+                <option value="50">50 rows</option>
+                <option value="100" selected>100 rows</option>
               </select>
             </div>
           </div>
@@ -212,21 +272,19 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Case / Order ID</th>
+                <th>Case & Order ID</th>
                 <th>Method</th>
                 <th>Amount</th>
                 <th>Cohort</th>
                 <th>Error Reason</th>
                 <th>AI Proposal</th>
                 <th>Policy Verdict</th>
-                <th>State</th>
+                <th>Final State</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody id="table-body">
-              <tr>
-                <td colspan="9" class="state-cell text-center">Loading transactions...</td>
-              </tr>
+              <!-- Rendered via JS with skeleton support -->
             </tbody>
           </table>
         </div>
@@ -239,10 +297,18 @@
       <div class="drawer-panel">
         <div class="drawer-header">
           <div class="drawer-title-group">
-            <span class="drawer-subtitle">Transaction Traceability</span>
-            <h3 class="drawer-case-id" id="drawer-case-id">Case ID</h3>
+            <span class="drawer-subtitle">Transaction Traceability & Audit</span>
+            <div class="drawer-case-row">
+              <h3 class="drawer-case-id" id="drawer-case-id">Case ID</h3>
+              <button class="btn-copy-id" id="btn-copy-case-id" title="Copy Case ID">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-copy">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
           </div>
-          <button class="drawer-close-btn" id="btn-close-drawer" aria-label="Close drawer">
+          <button class="drawer-close-btn" id="btn-close-drawer" aria-label="Close drawer" title="Close (ESC)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 6L6 18M6 6l12 12"/>
             </svg>
@@ -257,11 +323,11 @@
         <div class="drawer-tabs">
           <button class="tab-btn active" id="tab-btn-journey" data-tab="journey">
             <span class="tab-icon">⚡</span>
-            <span>9-Phase Journey</span>
+            <span>9-Phase Recovery Lifecycle</span>
           </button>
           <button class="tab-btn" id="tab-btn-audit" data-tab="audit">
             <span class="tab-icon">📜</span>
-            <span>Audit Hash Trail</span>
+            <span>Cryptographic SHA-256 Audit Trail</span>
           </button>
         </div>
 
@@ -269,13 +335,19 @@
           <!-- Tab 1: 9-Phase Journey Container -->
           <div class="tab-content active" id="tab-content-journey">
             <div class="pipeline-container" id="pipeline-container">
-              <!-- Rendered dynamically by app.js: 9 phases -->
+              <!-- Rendered dynamically by app.js -->
             </div>
           </div>
 
           <!-- Tab 2: Cryptographic Audit Trail Container -->
           <div class="tab-content" id="tab-content-audit">
-            <h4 class="timeline-heading">Cryptographic Audit Trail</h4>
+            <div class="audit-chain-summary-box" id="audit-chain-summary-box">
+              <div class="audit-summary-header">
+                <span class="audit-badge-verified">✓ Cryptographically Verified</span>
+                <span class="audit-algo-tag">SHA-256 Merkle Chain</span>
+              </div>
+              <p class="audit-summary-desc">Every event is hashed with the SHA-256 digest of its parent event, enforcing tamper-evident non-repudiation.</p>
+            </div>
             <div class="timeline-container" id="timeline-container">
               <!-- Timeline items rendered dynamically -->
             </div>
@@ -283,6 +355,9 @@
         </div>
       </div>
     </aside>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
   </div>
 
   <script src="app.js"></script>

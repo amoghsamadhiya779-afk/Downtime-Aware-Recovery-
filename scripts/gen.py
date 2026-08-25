@@ -6,7 +6,13 @@ starts from a clean, reproducible state (Phase 1 acceptance criterion 3).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# Ensure project root is on sys.path when script is executed directly
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from agent import db as agent_db
 from agent.policy.engine import load_rules
