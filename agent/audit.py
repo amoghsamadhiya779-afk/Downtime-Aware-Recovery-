@@ -41,6 +41,7 @@ EVENTS = frozenset(
         # action and transitioned the case accordingly.
         "RECONCILIATION_RESOLVED",
         "STATE_TRANSITION",
+        "DECISION_RECORDED",
     }
 )
 
