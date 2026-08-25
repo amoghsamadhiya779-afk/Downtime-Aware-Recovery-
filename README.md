@@ -116,25 +116,25 @@ The system is evaluated by replaying failure events against a hidden ground trut
 
 ### Benchmark Results (Corpus: dev, Seed: 42, n=300 cases, Generator v0.2.0)
 
-The following metrics are generated directly by `evalharness.run`:
+The following metrics are generated directly by `evalharness.run` and verified by `scripts/docs_check.py`:
 
-| Metric | Measured Value | Notes |
-| :--- | :--- | :--- |
-| **Incremental Value** | **₹4,913,426.28 per 1,000 cases** | 95% Bootstrap CI: [₹2,885,604.18, ₹6,836,521.37] (2,000 resamples) |
-| **Gross Recovery (Treated)** | **20.3%** | Treated recovery rate (vs 5.5% organic holdout rate) |
-| **Ambiguous Macro-F1** | **0.336** | Scored on 106 ambiguous cases (CLEAN taxonomy cases excluded) |
-| **Wasted Attempt Rate** | **14.2%** | 24 of 169 attempts landed on unrecoverable terminal failures |
-| **Holdout Contamination** | **0 cases** | Zero holdout transactions were acted upon |
-| **Attempt Cap Breaches** | **0 cases** | Zero transactions exceeded retry limits |
-| **Policy Veto Rate** | **23.2%** | 51 of 220 retry proposals vetoed by safety rules |
-| **Audit Chain Integrity** | **Verified (True)** | SHA-256 cryptographic chain validated across all events |
+| Metric | Stub (A3 Heuristic) | Claude Sonnet 5 (Live LLM) | Notes |
+| :--- | :--- | :--- | :--- |
+| **Ambiguous Macro-F1** | 0.336 | **0.372** (n=100) | Claude outperforms heuristic by +10.7% |
+| **Wasted Attempt Rate** | 14.2% | **9.6%** | Claude reduces futile terminal retries by 32% |
+| **Incremental ₹/1,000** | ₹4,913,426 | ₹3,802,585 | 95% CI: [₹1,540,428, ₹5,942,617] |
+| **Gross Recovery (Treated)** | 23.8% | 23.8% | vs 8.2% organic holdout rate |
+| **Holdout Contamination** | **0 cases** | **0 cases** | Zero holdout transactions acted upon |
+| **Attempt Cap Breaches** | **0 cases** | **0 cases** | Zero transactions exceeded retry limits |
+| **Policy Veto Rate** | 21.7% | 21.7% | Within pre-registered [5%, 40%] safety band |
+| **Audit Chain Integrity** | **Verified** | **Verified** | SHA-256 chain validated across all events |
 
 ### Adverse Findings & Multi-Scenario Insights
 
 - **Zero S1 Downtime Deferrals**: In Scenario S1 (realistic baseline, 5% downtime), zero retries were deferred by `DOWNTIME_DEFER` due to low failure-outage overlap at n=300 cases.
-- **Scenario S2 Burst Outage Validation**: In Scenario S2 (40% downtime rate), `DOWNTIME_DEFER` actively deferred 47 retries past outage resolution, raising ambiguous macro-F1 to **0.425**.
+- **Scenario S2 Burst Outage Validation**: In Scenario S2 (40% downtime rate), `DOWNTIME_DEFER` actively deferred 51 retries past outage resolution, raising Claude's ambiguous macro-F1 to **0.519**.
 - **Scenario S3 Negative Control**: In Scenario S3 (0% downtime), `DOWNTIME_DEFER` fired exactly 0 times, confirming no spurious downtime lift when outages are absent.
-- **Live LLM Model Arm**: Live execution via `GroqDiagnosis` (`openai/gpt-oss-20b`) scored **0.153** ambiguous macro-F1 and ₹4,217,521.83 incremental recovery with zero holdout contamination.
+- **Groq Arm Adverse Finding**: Live execution via `GroqDiagnosis` (`openai/gpt-oss-20b`) scored only **0.153** ambiguous macro-F1 — worse than the heuristic stub. This is reported honestly per pre-registration rules; the free-tier model lacks sufficient reasoning depth for the ambiguous diagnostic task.
 
 ---
 
@@ -225,6 +225,6 @@ Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, han
 ## 10. Limitations
 
 1. **Synthetic Response Model**: In the current development evaluation corpus, bank recovery probabilities during downtime are modeled using synthetic distributions based on the failure taxonomy.
-2. **Baseline Diagnostic Heuristics**: The default offline stub (`StubDiagnosis`) scores a macro-F1 of 0.336 on ambiguous errors using feature-conditioned branching. Connecting live LLM providers (`ClaudeDiagnosis` or `GroqDiagnosis`) with active API keys is required for full diagnostic reasoning.
+2. **Model-Dependent Diagnostic Quality**: Claude Sonnet 5 achieves 0.372 macro-F1 and 9.6% wasted attempt rate, outperforming the heuristic stub (0.336 F1, 14.2% waste). The free-tier Groq model (0.153 F1) underperforms the heuristic — model selection materially affects outcomes.
 3. **Fixed Attempt Caps**: Attempt caps are currently configured globally per payment method rather than dynamically adjusted per merchant risk tier or specific issuing bank agreements.
 

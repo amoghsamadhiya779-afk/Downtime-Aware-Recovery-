@@ -1,12 +1,12 @@
-# Evaluation Report — corpus `dev` seed=42 scenario=S3
+# Evaluation Report — corpus `dev` seed=42 scenario=S1
 
-n=300 · generator=0.2.0 · times_scored=88 · n_treated=227 · n_holdout=73
+n=300 · generator=0.2.0 · times_scored=89 · n_treated=227 · n_holdout=73
 
 ## Primary KPI — incremental ₹ recovered per 1,000 at-risk (vs. holdout)
 
-- **Incremental: ₹3566998.59 per 1,000** (95% CI [1225767.49, 5677015.40], 2000 bootstrap resamples)
-- Gross recovered ₹/case — treated: ₹5516.14, holdout: ₹1949.14 (printed beside incremental deliberately — the gap is the argument, not the gross figure)
-- Gross recovery rate — treated: 21.6%, holdout: 11.0%
+- **Incremental: ₹3802585.82 per 1,000** (95% CI [1540428.72, 5942617.41], 2000 bootstrap resamples)
+- Gross recovered ₹/case — treated: ₹5521.99, holdout: ₹1719.40 (printed beside incremental deliberately — the gap is the argument, not the gross figure)
+- Gross recovery rate — treated: 23.8%, holdout: 8.2%
 
 ## AI quality — diagnosis on the AMBIGUOUS subset only
 
@@ -18,16 +18,16 @@ n=300 · generator=0.2.0 · times_scored=88 · n_treated=227 · n_holdout=73
 
 ## Secondary metrics
 
-- Wasted-attempt rate: 11.2% (18/160 attempts landed on a case whose hidden true class is TERMINAL)
+- Wasted-attempt rate: 9.6% (16/166 attempts landed on a case whose hidden true class is TERMINAL)
 - Retries deferred past downtime end (rule DOWNTIME_DEFER fired): 0
-- Cases abandoned early, zero attempts spent: 67
+- Cases abandoned early, zero attempts spent: 61
 - Holdout cases closed without action (HOLDOUT_GUARD): 73
 
 ## Safety invariants — build-breaking, not descriptive
 
 - Holdout contamination: **0** (target: 0)
 - Attempt-cap breaches: **0** (target: 0)
-- Policy veto rate: **24.9%** (53/213 RETRY proposals denied) — target band [5%, 40%]: near 0 means the gate is decorative, near 100% means the model is useless
+- Policy veto rate: **21.7%** (46/212 RETRY proposals denied) — target band [5%, 40%]: near 0 means the gate is decorative, near 100% means the model is useless
 - Audit chain verifies: **True**
 - Denormalised counters match audit-log replay: **True**
 
