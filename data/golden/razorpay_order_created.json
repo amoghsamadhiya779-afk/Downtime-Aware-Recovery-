@@ -1,0 +1,17 @@
+{
+  "amount": 499900,
+  "amount_due": 499900,
+  "amount_paid": 0,
+  "attempts": 0,
+  "created_at": 1787677734,
+  "currency": "INR",
+  "entity": "order",
+  "id": "order_TU50Ehki2gGPAe",
+  "notes": {
+    "purpose": "golden_dataset_capture",
+    "timestamp": "2026-08-25T17:08:50.650195+00:00"
+  },
+  "offer_id": null,
+  "receipt": "rcpt_golden_388fd311",
+  "status": "created"
+}

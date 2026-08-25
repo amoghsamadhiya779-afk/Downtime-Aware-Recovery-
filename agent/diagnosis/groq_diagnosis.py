@@ -1,24 +1,16 @@
-"""AI-1 via Groq's free tier (no per-token cost, rate-limited only — no credit
-card required as of the check backing DECISIONS.md ADR-011).
+"""AI-1 via Groq's API with adaptive rate-limiting, backoff retries, and fallback ladders.
 
 Structurally identical to ClaudeDiagnosis: same prompt, same evidence-groundedness
 validation, same fail-closed fallback ladder, all shared via
-agent/diagnosis/prompting.py. This file supplies only the API call, using Groq's
-OpenAI-compatible chat completions interface. Swappable with ClaudeDiagnosis with
-no change to agent/pipeline.py — that interchangeability is exactly what the
-DiagnosisPort Protocol exists for.
-
-Default model is openai/gpt-oss-120b — confirmed live against the real API this
-session via GET /openai/v1/models after llama-3.3-70b-versatile (an earlier
-choice) came back 404 model_not_found; Groq had deprecated their Llama chat
-models in favor of the gpt-oss line. Groq's free-model lineup changes over time;
-if this model 404s as unavailable, list current models with:
-    from groq import Groq; [m.id for m in Groq(api_key=...).models.list().data]
-and update MODEL — this is a live external dependency, not a fixed fact.
+agent/diagnosis/prompting.py. Swappable with ClaudeDiagnosis or StubDiagnosis with
+no change to agent/pipeline.py (DiagnosisPort Protocol).
 """
+
+from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 from agent.diagnosis import prompting
 from agent.diagnosis.port import DiagnosisInput
@@ -27,17 +19,14 @@ from agent.models import DiagnosisProposal
 
 logger = get_logger("agent.diagnosis.groq")
 
-MODEL = "openai/gpt-oss-120b"
-TIMEOUT_SECONDS = 8
-# gpt-oss-120b is a reasoning model: hidden reasoning tokens count against
-# max_tokens. Confirmed live this session — at max_tokens=400 with no
-# reasoning_effort set, ~90% of the budget (350-398 tokens) went to reasoning and
-# every real call hit finish_reason="length" with truncated/empty JSON, silently
-# falling through to the tier-3 fail-closed path on every single request. Fixed by
-# capping reasoning effort and giving the larger schema (added this session: nested
-# expected_outcome, risks[], missing_information[]) more room to actually answer.
+MODEL = "openai/gpt-oss-20b"
+FALLBACK_MODEL = "openai/gpt-oss-120b"
+TIMEOUT_SECONDS = 10
 MAX_TOKENS = 600
 REASONING_EFFORT = "low"
+
+_LAST_CALL_TS: float = 0.0
+_MIN_REQUEST_INTERVAL: float = 0.5  # Pace requests to comply with free-tier RPM limit
 
 
 class GroqDiagnosis:
@@ -45,21 +34,50 @@ class GroqDiagnosis:
         self._api_key = api_key or os.environ.get("GROQ_API_KEY")
 
     def _call(self, prompt: str) -> str:
-        # Imported lazily, matching ClaudeDiagnosis — this module (and the policy
-        # suite) must stay importable without the groq package installed.
+        global _LAST_CALL_TS
+
         from groq import Groq
 
+        # Pace requests to prevent bursting
+        now = time.time()
+        elapsed = now - _LAST_CALL_TS
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+
+        _LAST_CALL_TS = time.time()
         client = Groq(api_key=self._api_key, timeout=TIMEOUT_SECONDS)
-        resp = client.chat.completions.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            reasoning_effort=REASONING_EFFORT,
-            messages=[
-                {"role": "system", "content": prompting.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return resp.choices[0].message.content or ""
+
+        # Call primary model
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                messages=[
+                    {"role": "system", "content": prompting.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            # If error is a rate limit or failure and fallback model is available, try fallback
+            err_str = str(e).lower()
+            if "rate_limit" in err_str or "429" in err_str or "overloaded" in err_str:
+                logger.log_event("diagnosis.groq.rate_limit", level="warning", error=str(e))
+                time.sleep(2.0)
+                try:
+                    resp = client.chat.completions.create(
+                        model=FALLBACK_MODEL,
+                        max_tokens=MAX_TOKENS,
+                        reasoning_effort=REASONING_EFFORT,
+                        messages=[
+                            {"role": "system", "content": prompting.SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    return resp.choices[0].message.content or ""
+                except Exception as e2:
+                    logger.log_event("diagnosis.groq.fallback_failed", level="warning", error=str(e2))
+            raise
 
     def diagnose(self, inp: DiagnosisInput) -> DiagnosisProposal:
         prompt = prompting.build_prompt(inp)

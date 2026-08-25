@@ -1,0 +1,15 @@
+{
+  "entity": "payment.downtime",
+  "id": "down_live_hdfc_001",
+  "method": "netbanking",
+  "bank": "HDFC",
+  "scheduled": false,
+  "severity": "high",
+  "status": "started",
+  "begin": 1787677731,
+  "end": 1787684931,
+  "instrument": {
+    "bank": "HDFC"
+  },
+  "created_at": 1787677731
+}

@@ -32,15 +32,20 @@ def known_rule_ids() -> set[str]:
 def check_numeric_provenance() -> list[str]:
     readme_path = ROOT / "README.md"
     report_path = ROOT / "eval" / "report.md"
-    if not readme_path.exists() or not report_path.exists():
-        return []
+    comparison_path = ROOT / "eval" / "comparison.md"
+
+    problems = []
+    if not report_path.exists():
+        problems.append("eval/report.md does not exist. Run 'python -m evalharness.run' first.")
+        return problems
 
     readme_text = readme_path.read_text(encoding="utf-8")
     report_text = report_path.read_text(encoding="utf-8")
+    comp_text = comparison_path.read_text(encoding="utf-8") if comparison_path.exists() else ""
 
     # Extract all numbers from report.md (normalizing commas, currency, percentages)
     report_tokens = set()
-    for raw in re.findall(r"[₹$]?\b\d+(?:,\d+)*(?:\.\d+)?%?\b", report_text):
+    for raw in re.findall(r"[₹$]?\b\d+(?:,\d+)*(?:\.\d+)?%?\b", report_text + "\n" + comp_text):
         cleaned = raw.replace("₹", "").replace("$", "").replace(",", "").replace("%", "").strip()
         if cleaned:
             report_tokens.add(cleaned)
@@ -55,16 +60,15 @@ def check_numeric_provenance() -> list[str]:
         "2499", "2499.00", # Demo recovery amount
         "25",           # Holdout percentage
         "100",          # Max confidence %
-        "326", "324", "321", "313", # Test suite counts
+        "330", "326", "324", "321", "313", # Test suite counts
         "2000", "10000", "1000", # Resampling & corpus sizes
-        "120",          # gpt-oss-120b model name
+        "120", "20",    # gpt-oss-120b & 20b model names
         "0",            # Zero counter / baseline
         "42",           # Seed
         "300",          # Dev cases
         "90", "15",     # Backoff / min delay
     }
 
-    problems = []
     for raw in re.findall(r"[₹$]?\b\d+(?:,\d+)*(?:\.\d+)?%?\b", readme_text):
         cleaned = raw.replace("₹", "").replace("$", "").replace(",", "").replace("%", "").strip()
         if not cleaned:

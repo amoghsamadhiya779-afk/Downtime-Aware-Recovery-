@@ -1,0 +1,9 @@
+{
+  "corpus": "test",
+  "seed": 777001,
+  "scenario_id": "S1",
+  "n": 1000,
+  "generator_version": "1.0.0",
+  "times_scored": 0,
+  "created_at": "2026-08-25T06:53:43.856701Z"
+}

@@ -1,0 +1,39 @@
+{
+  "accept_partial": false,
+  "allow_full_payment": false,
+  "amount": 249900,
+  "amount_paid": 0,
+  "cancelled_at": 0,
+  "created_at": 1787677735,
+  "currency": "INR",
+  "customer": {
+    "contact": "+919876543210",
+    "email": "arjun.mehta@example.com",
+    "name": "Arjun Mehta"
+  },
+  "description": "Golden Dataset Recovery Link Verification",
+  "expire_by": 0,
+  "expired_at": 0,
+  "first_min_partial_amount": 0,
+  "id": "plink_TU50FETrc5mOSX",
+  "notes": {
+    "order_id": "order_TU50Ehki2gGPAe",
+    "purpose": "golden_dataset_capture"
+  },
+  "notify": {
+    "email": false,
+    "sms": false,
+    "whatsapp": false
+  },
+  "payment_plan": false,
+  "payments": null,
+  "reference_id": "pl_ref_ae565185f854",
+  "reminder_enable": true,
+  "reminders": [],
+  "short_url": "https://rzp.io/rzp/WcMc9St1",
+  "status": "created",
+  "updated_at": 1787677735,
+  "upi_link": false,
+  "user_id": "",
+  "whatsapp_link": false
+}
