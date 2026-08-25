@@ -36,7 +36,7 @@ from agent.triage import AMBIGUOUS, CLEAN
 
 from datagen.schema import BatchManifest, GroundTruth
 
-GENERATOR_VERSION = "0.1.0"
+GENERATOR_VERSION = "0.2.0"
 
 METHODS = [Method.CARD, Method.NETBANKING, Method.UPI, Method.EMANDATE]
 
@@ -56,6 +56,113 @@ _INSTRUMENTS: dict[Method, list[Instrument]] = {
 
 _CLEAN_REASONS = list(CLEAN.keys())
 _AMBIGUOUS_REASONS = list(AMBIGUOUS)
+
+_AMBIGUOUS_BASE_PRIORS: dict[str, dict[Recoverability, float]] = {
+    "payment_failed": {
+        Recoverability.TRANSIENT_INFRA: 0.25,
+        Recoverability.CUSTOMER_FIXABLE: 0.25,
+        Recoverability.INSTRUMENT_INVALID: 0.25,
+        Recoverability.TERMINAL: 0.25,
+    },
+    "payment_declined_by_bank": {
+        Recoverability.TRANSIENT_INFRA: 0.25,
+        Recoverability.CUSTOMER_FIXABLE: 0.25,
+        Recoverability.INSTRUMENT_INVALID: 0.25,
+        Recoverability.TERMINAL: 0.25,
+    },
+    "authentication_failed": {
+        Recoverability.TRANSIENT_INFRA: 0.20,
+        Recoverability.CUSTOMER_FIXABLE: 0.40,
+        Recoverability.INSTRUMENT_INVALID: 0.20,
+        Recoverability.TERMINAL: 0.20,
+    },
+    "collect_request_expired": {
+        Recoverability.TRANSIENT_INFRA: 0.30,
+        Recoverability.CUSTOMER_FIXABLE: 0.30,
+        Recoverability.INSTRUMENT_INVALID: 0.20,
+        Recoverability.TERMINAL: 0.20,
+    },
+    "transaction_limit_exceeded": {
+        Recoverability.TRANSIENT_INFRA: 0.20,
+        Recoverability.CUSTOMER_FIXABLE: 0.30,
+        Recoverability.INSTRUMENT_INVALID: 0.20,
+        Recoverability.TERMINAL: 0.30,
+    },
+}
+
+
+def conditioned_ambiguous_probs(
+    reason: str,
+    *,
+    downtime_active: bool,
+    method: Method,
+    amount_paise: int,
+    is_recurring: bool,
+) -> dict[Recoverability, float]:
+    """Computes posterior distribution P(true_class | features) for an AMBIGUOUS case.
+    
+    Per-reason base prior, modified by multiplicative shifts across observable/latent
+    features, normalized to a probability simplex (ADR-021)."""
+    base = _AMBIGUOUS_BASE_PRIORS.get(
+        reason,
+        {
+            Recoverability.TRANSIENT_INFRA: 0.25,
+            Recoverability.CUSTOMER_FIXABLE: 0.25,
+            Recoverability.INSTRUMENT_INVALID: 0.25,
+            Recoverability.TERMINAL: 0.25,
+        },
+    )
+    weights = dict(base)
+
+    # 1. Downtime active: strong shift towards TRANSIENT_INFRA
+    if downtime_active:
+        weights[Recoverability.TRANSIENT_INFRA] *= 30.0
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 0.05
+        weights[Recoverability.INSTRUMENT_INVALID] *= 0.05
+        weights[Recoverability.TERMINAL] *= 0.05
+    else:
+        weights[Recoverability.TRANSIENT_INFRA] *= 0.02
+
+    # 2. Recurring mandates: shift towards TERMINAL / INSTRUMENT_INVALID (no interactive human)
+    if is_recurring:
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 0.02
+        weights[Recoverability.TERMINAL] *= 10.0
+        weights[Recoverability.INSTRUMENT_INVALID] *= 5.0
+    else:
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 3.5
+
+    # 3. Method-specific shifts
+    if method == Method.CARD:
+        weights[Recoverability.INSTRUMENT_INVALID] *= 8.0
+    elif method == Method.UPI:
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 3.0
+        weights[Recoverability.INSTRUMENT_INVALID] *= 0.1
+    elif method == Method.EMANDATE:
+        weights[Recoverability.TERMINAL] *= 6.0
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 0.05
+    elif method == Method.NETBANKING:
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 2.5
+        weights[Recoverability.INSTRUMENT_INVALID] *= 0.1
+
+    # 4. Amount band shifts
+    if amount_paise < 50_000:  # < ₹500
+        weights[Recoverability.INSTRUMENT_INVALID] *= 4.0
+        weights[Recoverability.TERMINAL] *= 0.2
+    elif amount_paise > 1_000_000:  # > ₹10,000
+        if reason == "transaction_limit_exceeded":
+            weights[Recoverability.TERMINAL] *= 10.0
+        else:
+            weights[Recoverability.TERMINAL] *= 5.0
+
+    # 5. Reason-specific adjustments in non-downtime conditions
+    if not downtime_active:
+        if reason == "authentication_failed" and not is_recurring:
+            weights[Recoverability.CUSTOMER_FIXABLE] *= 5.0
+        elif reason == "collect_request_expired" and method == Method.UPI and not is_recurring:
+            weights[Recoverability.CUSTOMER_FIXABLE] *= 5.0
+
+    total = sum(weights.values())
+    return {k: v / total for k, v in weights.items()}
 
 
 @dataclass
@@ -94,16 +201,28 @@ def _hidden_probs(rng: random.Random, true_class: Recoverability, downtime_activ
     )
 
 
-def _pick_true_class(rng: random.Random, reason: str, ambiguous: bool) -> Recoverability:
+def _pick_true_class(
+    rng: random.Random,
+    reason: str,
+    ambiguous: bool,
+    *,
+    downtime_active: bool = False,
+    method: Method = Method.UPI,
+    amount_paise: int = 100_000,
+    is_recurring: bool = False,
+) -> Recoverability:
     if not ambiguous:
         return CLEAN[reason]
-    weights = {
-        Recoverability.TRANSIENT_INFRA: 0.40,
-        Recoverability.CUSTOMER_FIXABLE: 0.30,
-        Recoverability.INSTRUMENT_INVALID: 0.15,
-        Recoverability.TERMINAL: 0.15,
-    }
-    return rng.choices(list(weights), weights=list(weights.values()), k=1)[0]
+    probs = conditioned_ambiguous_probs(
+        reason,
+        downtime_active=downtime_active,
+        method=method,
+        amount_paise=amount_paise,
+        is_recurring=is_recurring,
+    )
+    classes = list(probs.keys())
+    weights = list(probs.values())
+    return rng.choices(classes, weights=weights, k=1)[0]
 
 
 def generate(
@@ -112,7 +231,7 @@ def generate(
     n: int,
     corpus: str,
     scenario_id: str = "S1",
-    downtime_rate: float = 0.05,
+    downtime_rate: float | None = None,
     ambiguous_fraction: float = 0.30,
     terminal_floor: float = 0.15,
     start: datetime | None = None,
@@ -122,27 +241,36 @@ def generate(
     rng = random.Random(seed)
     start = start or datetime(2026, 8, 1, tzinfo=timezone.utc)
 
+    if downtime_rate is None:
+        if scenario_id == "S2":
+            downtime_rate = 0.40  # S2 burst: elevated outage rate
+        elif scenario_id == "S3":
+            downtime_rate = 0.0   # S3 negative control: zero downtime
+        else:
+            downtime_rate = 0.05  # S1 baseline realistic downtime
+
     # A handful of downtime windows at roughly the configured affected-record rate
-    # (S1 "realistic rate" per the plan; S2 burst uses a higher downtime_rate).
+    # (S1 "realistic rate" per the plan; S2 burst uses a higher downtime_rate; S3 has 0).
     windows: list[DowntimeWindow] = []
-    n_windows = max(1, round(n * downtime_rate / 8))  # ~8 records/window on average
-    for i in range(n_windows):
-        method = rng.choice(METHODS)
-        instrument = rng.choice(_INSTRUMENTS[method])
-        begin = start + timedelta(hours=rng.randint(0, 24 * 20))
-        end = begin + timedelta(hours=rng.randint(1, 6)) if rng.random() < 0.7 else None
-        windows.append(
-            DowntimeWindow(
-                id=f"down_{corpus}_{seed}_{i:03d}",
-                method=method,
-                instrument=instrument,
-                begin=begin,
-                end=end,
-                status="started",
-                scheduled=rng.random() < 0.3,
-                severity=rng.choice(["low", "medium", "high"]),
+    if downtime_rate > 0.0:
+        n_windows = max(1, round(n * downtime_rate / 8))
+        for i in range(n_windows):
+            method = rng.choice(METHODS)
+            instrument = rng.choice(_INSTRUMENTS[method])
+            begin = start + timedelta(hours=rng.randint(0, 24 * 20))
+            end = begin + timedelta(hours=rng.randint(2, 12 if scenario_id == "S2" else 6)) if rng.random() < 0.8 else None
+            windows.append(
+                DowntimeWindow(
+                    id=f"down_{corpus}_{seed}_{i:03d}",
+                    method=method,
+                    instrument=instrument,
+                    begin=begin,
+                    end=end,
+                    status="started",
+                    scheduled=rng.random() < 0.3,
+                    severity=rng.choice(["low", "medium", "high"]),
+                )
             )
-        )
 
     records: list[GeneratedRecord] = []
     n_customers = max(1, n // 3)
@@ -152,7 +280,6 @@ def generate(
         instrument = rng.choice(_INSTRUMENTS[method])
         ambiguous = rng.random() < ambiguous_fraction
         reason = rng.choice(_AMBIGUOUS_REASONS) if ambiguous else rng.choice(_CLEAN_REASONS)
-        true_class = _pick_true_class(rng, reason, ambiguous)
 
         created_at = start + timedelta(hours=rng.randint(0, 24 * 25), minutes=rng.randint(0, 59))
         downtime_active = any(
@@ -160,6 +287,19 @@ def generate(
             and instrument.matches(w.instrument)
             and w.begin <= created_at < (w.end or created_at + timedelta(days=1))
             for w in windows
+        )
+
+        is_recurring = rng.random() < 0.3
+        amount_paise = rng.randint(1_000, 5_000_000)
+
+        true_class = _pick_true_class(
+            rng,
+            reason,
+            ambiguous,
+            downtime_active=downtime_active,
+            method=method,
+            amount_paise=amount_paise,
+            is_recurring=is_recurring,
         )
 
         probs = _hidden_probs(rng, true_class, downtime_active)
@@ -173,7 +313,6 @@ def generate(
             max_recoverable=probs["p_retry_after_downtime"] > 0.05 or probs["p_retry_now"] > 0.05,
         )
 
-        is_recurring = rng.random() < 0.3
         pf = PaymentFailure(
             case_id=case_id,
             customer_id=f"cust_{rng.randrange(0, n_customers):05d}",
@@ -181,13 +320,8 @@ def generate(
             created_at=created_at,
             method=method,
             instrument=instrument,
-            amount_paise=rng.randint(1_000, 5_000_000),
+            amount_paise=amount_paise,
             is_recurring=is_recurring,
-            # Was a SECOND, independent `rng.random() < 0.3` draw — two unrelated
-            # coin flips meant is_recurring and mandate_id disagreed on ~42% of
-            # records (confirmed: 130/300 in the data/dev.db this bug produced).
-            # A mandate implies recurring and vice versa; there is no other valid
-            # combination.
             mandate_id=f"mandate_{i:05d}" if is_recurring else None,
             attempt_no=1,
             error=ErrorObj(

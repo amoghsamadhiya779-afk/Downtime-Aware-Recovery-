@@ -14,7 +14,7 @@
 | **2. Product** | 0:50 – 1:40 | Architecture: Zero-LLM Policy Sovereignty & Audit Chain | Dashboard UI (`http://localhost:8000`) |
 | **3. Normal Case** | 1:40 – 2:35 | Autonomous End-to-End Recovery Journey (9 Phases) | `python scripts/demo_controls.py --scenario successful_recovery` + UI Drawer |
 | **4. Failure Case** | 2:35 – 3:35 | Unsafe AI Veto & Gateway Timeout Quarantine | `python scripts/demo_controls.py --scenario unsafe_ai_blocked` |
-| **5. Metrics** | 3:35 – 4:20 | Randomized Holdout Science & Highcharts Analytics | `python -m evalharness.run` & Analytics Grid |
+| **5. Metrics** | 3:35 – 4:20 | Randomized Holdout Science & Hand-rolled CSS Analytics | `python -m evalharness.run` & Analytics Grid |
 | **6. Business Value** | 4:20 – 5:00 | Unit Economics & Enterprise Guarantees | Executive Summary & Next Steps |
 
 ---
@@ -51,7 +51,7 @@
 > - **Actions Executed vs Blocked**: Transparency into how often our deterministic safety gate intercepts unsafe actions.
 > - **AI Calibrated Confidence & Failure Rate**.
 >
-> Below this is our **Highcharts Analytics Grid**, showing live cohort lift (Treated vs Holdout), recovery efficacy across Indian payment instruments (UPI, Cards, Netbanking, eMandates), and real-time transaction state machine distribution."
+> Below this is our **Hand-rolled CSS Analytics Grid**, showing live cohort lift (Treated vs Holdout), recovery efficacy across Indian payment instruments (UPI, Cards, Netbanking, eMandates), and real-time transaction state machine distribution."
 
 ---
 

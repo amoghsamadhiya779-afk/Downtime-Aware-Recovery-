@@ -90,3 +90,52 @@ def test_output_is_schema_valid_like_any_other_port():
     p = BaselineDiagnosis().diagnose(_inp("payment_failed"))
     assert isinstance(p, DiagnosisProposal)
     DiagnosisProposal.model_validate(p.model_dump(mode="json"))
+
+
+def test_stub_and_baseline_disagree_on_corpus_sample():
+    """Regression test: StubDiagnosis (intelligent stand-in) and BaselineDiagnosis
+    (context-blind A1 arm) must NOT emit identical proposals on AMBIGUOUS cases.
+    The A1 ablation arm must have genuine independent existence."""
+    from agent.diagnosis.stub import StubDiagnosis
+    from agent.triage import AMBIGUOUS
+
+    stub = StubDiagnosis()
+    baseline = BaselineDiagnosis()
+
+    sample_inputs = [
+        # Recurring mandate failure -> Stub: TERMINAL/STOP, Baseline: TRANSIENT_INFRA/RETRY
+        _inp("payment_failed", is_recurring=True, method=Method.EMANDATE),
+        # Recurring card failure -> Stub: INSTRUMENT_INVALID/STOP, Baseline: TRANSIENT_INFRA/RETRY
+        _inp("payment_declined_by_bank", is_recurring=True, method=Method.CARD),
+        # Active downtime -> Stub: TRANSIENT_INFRA/RETRY/conf=0.85/evidence, Baseline: conf=0.5/no evidence
+        _inp(
+            "payment_failed",
+            downtime=DowntimeContext(active=True, severity="high", instrument_match=True),
+        ),
+        # High value transaction limit -> Stub: TERMINAL/STOP, Baseline: TRANSIENT_INFRA/RETRY
+        _inp("transaction_limit_exceeded", amount_paise=2_500_000),
+        # Card payment failed -> Stub: INSTRUMENT_INVALID/STOP, Baseline: TRANSIENT_INFRA/RETRY
+        _inp("payment_failed", method=Method.CARD),
+        # Authentication failed -> Stub: CUSTOMER_FIXABLE/delay=15, Baseline: TRANSIENT_INFRA/delay=60
+        _inp("authentication_failed", method=Method.UPI),
+    ]
+
+    disagreements = 0
+    for inp in sample_inputs:
+        stub_prop = stub.diagnose(inp)
+        base_prop = baseline.diagnose(inp)
+
+        has_diff = (
+            stub_prop.recoverability != base_prop.recoverability
+            or stub_prop.proposed_action != base_prop.proposed_action
+            or stub_prop.proposed_delay_minutes != base_prop.proposed_delay_minutes
+            or stub_prop.confidence != base_prop.confidence
+            or stub_prop.evidence != base_prop.evidence
+        )
+        if has_diff:
+            disagreements += 1
+
+    # Must disagree on every single sample in this diverse set
+    assert disagreements == len(sample_inputs)
+    assert disagreements > 0
+

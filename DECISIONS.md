@@ -773,3 +773,40 @@ the pre-change baseline (₹5,266,944.63, 178 attempts, 49 abandoned, contaminat
 0, chain verifies, counters reconcile).
 
 Full suite: **224/224** (115 prior + 98 state machine + 11 refusal recovery).
+
+## ADR-021 — Feature-conditioned synthetic ground-truth labels for AMBIGUOUS cases
+
+### The defect in the generator
+
+`datagen/generate.py::_pick_true_class()` previously sampled AMBIGUOUS labels from a fixed global weight vector (`{TRANSIENT_INFRA: 0.40, CUSTOMER_FIXABLE: 0.30, INSTRUMENT_INVALID: 0.15, TERMINAL: 0.15}`) regardless of payment method, error reason, amount, recurring status, or active downtime.
+
+This created a structural flaw in the evaluation harness:
+1. **Chance ceiling by construction**: Because ground-truth labels had zero dependence on observable transaction context, no model or rule could perform better than random guessing across the prior distribution.
+2. **Unmeasurable AI delta**: The diagnostic F1 score of any intelligent classifier was capped at chance, making it impossible to evaluate whether LLM reasoning added value over a naive heuristic.
+
+### Chosen: feature-conditioned posterior with stochastic sampling
+
+1. **Reordered generation pipeline**: Computed `created_at`, `downtime_active`, `is_recurring`, `amount_paise`, and `method` *before* sampling the ground-truth recoverability label `true_class`.
+2. **Conditioned probability distribution**:
+   - Each ambiguous reason starts from a base prior across recoverability classes.
+   - Observable signals apply multiplicative shifts to the distribution:
+     - `downtime_active`: strongly shifts probability toward `TRANSIENT_INFRA`.
+     - `is_recurring`: shifts probability toward `TERMINAL` and `INSTRUMENT_INVALID` (no interactive user to supply OTP/retry).
+     - `method`: payment method specific failure tendencies (e.g. Card expiry vs UPI collect expiration vs eMandate revocation).
+     - `amount_paise`: amount bands shift probabilities (e.g. low amounts toward instrument issues, high amounts toward terminal limit breaches).
+   - Weights are renormalized into a proper probability simplex.
+   - `true_class` is drawn stochastically from the categorical distribution via `rng.choices` — **never argmax**, preserving natural variance and realistic noise.
+3. **Version bump**: `GENERATOR_VERSION` bumped from `0.1.0` to `0.2.0`.
+
+### Rejected
+
+- *Deterministic mapping (`reason -> class`)*: Would collapse the AMBIGUOUS/CLEAN distinction and turn the diagnostic confusion matrix into pure theatre.
+- *Argmax label assignment*: Would artificially eliminate stochastic variance and produce overconfident, unrealistic synthetic data.
+- *Post-hoc tuning to favor AI evaluation*: Evaluating or tuning the generator against AI arm outcomes is explicitly prohibited by `eval/PREREGISTRATION.md`.
+
+### Structural verification
+
+Tested via `tests/test_datagen_labels.py` asserting properties of the data-generating process:
+- A reason-only predictor (marginalizing out features) scores macro-F1 < 0.40.
+- A full-information oracle (knowing all generating features) scores macro-F1 > 0.75.
+

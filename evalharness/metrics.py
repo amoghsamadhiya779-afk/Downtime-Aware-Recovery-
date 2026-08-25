@@ -215,6 +215,8 @@ def compute_all_metrics(
     chain_ok: bool,
     counters_ok: bool,
     rules: Rules,
+    times_scored: int = 1,
+    rescore_override: bool = False,
 ) -> dict:
     outcomes = compute_outcomes(conn, ground_truth, seed)
     treated = [(o["amount_paise"], o["recovered"]) for o in outcomes.values() if o["cohort"] == "TREATED"]
@@ -243,6 +245,8 @@ def compute_all_metrics(
             "scenario": manifest.scenario_id,
             "n": manifest.n,
             "generator_version": manifest.generator_version,
+            "times_scored": times_scored,
+            "rescore_override": rescore_override,
         },
         "incremental": inc,
         "gross": {
@@ -280,9 +284,19 @@ def build_report(
     chain_ok: bool,
     counters_ok: bool,
     rules: Rules,
+    times_scored: int = 1,
+    rescore_override: bool = False,
 ) -> str:
     m = compute_all_metrics(
-        conn, ground_truth, seed=seed, manifest=manifest, chain_ok=chain_ok, counters_ok=counters_ok, rules=rules
+        conn,
+        ground_truth,
+        seed=seed,
+        manifest=manifest,
+        chain_ok=chain_ok,
+        counters_ok=counters_ok,
+        rules=rules,
+        times_scored=times_scored,
+        rescore_override=rescore_override,
     )
     inc = m["incremental"]
     gross_rate_treated = m["gross"]["treated_rate"]
@@ -303,7 +317,7 @@ def build_report(
     lines.append(f"# Evaluation Report — corpus `{manifest.corpus}` seed={seed} scenario={manifest.scenario_id}")
     lines.append("")
     lines.append(
-        f"n={manifest.n} · generator={manifest.generator_version} · "
+        f"n={manifest.n} · generator={manifest.generator_version} · times_scored={times_scored} · "
         f"n_treated={inc['n_treated']} · n_holdout={inc['n_holdout']}"
     )
     lines.append("")
