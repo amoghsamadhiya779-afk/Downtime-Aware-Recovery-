@@ -11,34 +11,22 @@ Comprehensive multi-arm comparison across diagnosis backends and failure scenari
 | **stub (A3 heuristic)** | **S3** | **0.312** | ₹1,035,707 [-2,264,398 – 4,008,478] | 10.8% | 23.4% | **0** | Active (Local Heuristic) |
 | **baseline (A1 context-blind)** | **S1** | **0.000** | N/A | 19.3% | 24.3% | **0** | Active (Context-Blind) |
 | **groq (openai/gpt-oss-20b)** | **S1** | **0.153** | ₹4,217,521 [2,323,352 – 6,079,551] | 19.9% | 23.6% | **0** | Active (Live LLM) |
-| **claude (claude-sonnet-5)** | **S1** | **0.372** | ₹3,802,585 [1,540,428 – 5,942,617] | **9.6%** | 21.7% | **0** | ✅ Active (Live LLM) |
-| **claude (claude-sonnet-5)** | **S2** | **0.519** | ₹4,417,663 [1,609,172 – 6,800,593] | **11.0%** | 23.7% | **51** | ✅ Active (Live LLM) |
-| **claude (claude-sonnet-5)** | **S3** | **0.372** | ₹3,566,998 [1,225,767 – 5,677,015] | **11.2%** | 24.9% | **0** | ✅ Active (Live LLM) |
+| **claude (claude-sonnet-5)** | **S1** | **0.372** | ₹3,802,585 [1,540,428 – 5,942,617] | **9.6%** | 21.7% | **0** | Active (Live LLM) |
+| **claude (claude-sonnet-5)** | **S2** | **0.519** | ₹4,417,663 [1,609,172 – 6,800,593] | **11.0%** | 23.7% | **51** | Active (Live LLM) |
+| **claude (claude-sonnet-5)** | **S3** | **0.372** | ₹3,566,998 [1,225,767 – 5,677,015] | **11.2%** | 24.9% | **0** | Active (Live LLM) |
 
 ## 2. Key Empirical Findings & Ablation Analysis
 
-### A. AI Necessity — Claude Sonnet 5 vs Heuristic Stub
+### A. Value of Context-Aware Diagnosis (Claude Sonnet 5 vs Heuristic Stub)
+- **Context-Blind Baseline (A1)** scores **0.000 Macro-F1** on ambiguous cases and suffers a higher wasted attempt rate (**19.3%**) because it cannot distinguish between terminal account closures and transient errors.
+- **Stub Heuristic (A3)** achieves **0.336 Macro-F1** and reduces wasted attempts to **14.2%**, while the live LLM arm (**Claude Sonnet 5**) achieves **0.372 Macro-F1** (+10.7% relative improvement) and reduces wasted attempts to **9.6%** (32% reduction in futile retries). On S2 (burst outage), Claude reaches **0.519 Macro-F1**.
+- **Groq Free-Tier Arm (Adverse Finding)** scores **0.153 Macro-F1**, demonstrating that smaller open models lack sufficient reasoning depth for the ambiguous failure tail.
 
-Claude's live LLM diagnosis **outperforms the hand-coded heuristic** on the key metric:
-- **Macro-F1**: Claude 0.372 vs Stub 0.336 on S1 (+10.7% relative improvement).
-- **Wasted Attempt Rate**: Claude **9.6%** vs Stub **14.2%** — a 32% reduction in futile retries on terminal failures.
-- On S2 (burst outage), Claude reaches **0.519 macro-F1**, demonstrating the model can leverage downtime context that heuristics cannot.
+### B. Downtime Mechanism across Scenarios S1, S2, and S3
+- **S1 (Realistic Baseline, 5% downtime)**: Low overlap between failures and outages at n=300 yields `DOWNTIME_DEFER = 0`.
+- **S2 (Burst Outage, 40% downtime)**: High outage overlap causes `DOWNTIME_DEFER` to fire **47–51 times**, deferring retries past outage resolution and raising Macro-F1 to **0.425–0.519**.
+- **S3 (Negative Control, 0% downtime)**: Zero downtime windows in corpus produces strictly **0** deferrals, confirming zero false lift.
 
-The **context-blind baseline (A1)** scores **0.000 F1**, confirming the diagnostic task is non-trivial and context-dependent.
-
-### B. Groq LLM Arm — Adverse Finding (Reported Honestly)
-
-The Groq arm (`openai/gpt-oss-20b`) scores only **0.153 F1** — worse than both Claude and the heuristic stub. This is an honest adverse finding: the free-tier model lacks sufficient reasoning depth for the ambiguous diagnostic task. The result is reported as-is per pre-registration rules.
-
-### C. Downtime Mechanism across Scenarios S1, S2, and S3
-
-- **S1 (Realistic Baseline, 5% downtime)**: Low overlap at n=300 yields `DOWNTIME_DEFER = 0`.
-- **S2 (Burst Outage, 40% downtime)**: High outage overlap causes `DOWNTIME_DEFER` to fire **47–51 times** (stub: 47, Claude: 51), deferring retries past outage resolution.
-- **S3 (Negative Control, 0% downtime)**: Exactly **0** deferrals. No false lift — the mechanism is inert when there is no downtime signal.
-
-### D. Safety Invariants (All Arms, All Scenarios)
-
-- **Holdout Contamination**: 0 across all runs
-- **Attempt Cap Breaches**: 0 across all runs
-- **Audit Chain Verification**: True across all runs
-- **Policy Veto Rate**: 21.7%–24.9% — within the pre-registered [5%, 40%] safety band
+### C. Safety Invariants
+- Across all arms and scenarios: **Holdout Contamination = 0**, **Attempt Cap Breaches = 0**, **Audit Chain Verifies = True**.
+- Policy veto rate remains strictly within the pre-registered [5%, 40%] target safety band (21.7% - 24.9%).

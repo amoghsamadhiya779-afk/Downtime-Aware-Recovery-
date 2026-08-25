@@ -242,6 +242,61 @@ def populate_sample_dataset(conn: sqlite3.Connection, n: int = 50, seed: int = 7
     logger.log_event("dashboard.dataset.populated", count=n)
 
 
+def process_unprocessed_cases(conn: sqlite3.Connection, seed: int = 42) -> None:
+    """Process any pending DETECTED cases so the dashboard exhibits live operational recovery metrics."""
+    import random
+    from datetime import datetime, timezone
+    from agent.clock import VirtualClock
+    from agent.diagnosis.stub import StubDiagnosis
+    from agent.downtime import DowntimeStore
+    from agent.executors.simulated import SimulatedExecutor
+    from agent.pipeline import process_case
+    from agent.policy.engine import load_rules
+
+    rules = load_rules()
+    downtime = DowntimeStore(conn)
+    clock = VirtualClock(start=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    # Read ground truth if available for realistic outcome probabilities
+    gt_file = Path("data/dev_ground_truth.jsonl")
+    gt = {}
+    if gt_file.exists():
+        try:
+            from datagen.generate import read_ground_truth
+            _, gt = read_ground_truth(gt_file)
+        except Exception:
+            pass
+
+    def outcome_fn(verdict):
+        item = gt.get(verdict.case_id)
+        if item:
+            if "DOWNTIME_DEFER" in verdict.fired_rules:
+                return item.p_retry_after_downtime
+            return item.p_retry_now
+        return 0.75
+
+    executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(seed))
+    diagnosis = StubDiagnosis()
+
+    pending = conn.execute("SELECT case_id, created_at FROM cases WHERE state = 'DETECTED' ORDER BY created_at ASC").fetchall()
+    if pending:
+        logger.log_event("dashboard.processing_pending_cases", count=len(pending))
+        for row in pending:
+            try:
+                clock.set(datetime.fromisoformat(row["created_at"]))
+            except Exception:
+                pass
+            process_case(
+                conn,
+                row["case_id"],
+                clock=clock,
+                rules=rules,
+                downtime=downtime,
+                diagnosis_port=diagnosis,
+                executor=executor,
+            )
+
+
 from agent.config import load_config
 
 
@@ -264,6 +319,12 @@ def main() -> None:
     if case_count == 0:
         print(f"Operational database is empty. Generating {args.n} sample transactions (seed={args.seed})...")
         populate_sample_dataset(conn, n=args.n, seed=args.seed)
+    else:
+        # Check if cases are unprocessed and run pipeline to populate metrics
+        action_count = conn.execute("SELECT COUNT(*) AS c FROM actions").fetchone()["c"]
+        if action_count == 0:
+            print("Processing pending payment failure signals through control plane...")
+            process_unprocessed_cases(conn, seed=args.seed)
 
     server_address = (args.host if args.host != "127.0.0.1" else "", args.port)
     httpd = HTTPServer(server_address, DashboardRequestHandler)

@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-08-25T18:20:59.834722+00:00",
+  "case_id": "proof_2fb8371a4782",
+  "razorpay_key_id": "rzp_test_TU6...Whh4",
+  "mode": "TEST",
+  "first_dispatch": {
+    "outcome": "SUCCEEDED",
+    "mode": "LIVE",
+    "replayed": false,
+    "detail": "Razorpay Payment Link: plink_TU6ELop2lROBfx (https://rzp.io/rzp/i6WppKsk)",
+    "executed_at": "2026-08-25T18:20:58.081413+00:00"
+  },
+  "idempotency_check": {
+    "outcome": "SUCCEEDED",
+    "replayed": true,
+    "detail": "Idempotent replay: payment link with given reference_id: 6db8cb3f7b3b76d1e734f3ef03a0f4cfff278852 already exists. Please create a payment link with a different reference_id"
+  },
+  "idempotency_key": "6db8cb3f7b3b76d1e734f3ef03a0f4cfff2788528ca0a9f7eb74e36c03cb1c12",
+  "amount_paise": 249900,
+  "verdict_decision": "ALLOW",
+  "verdict_action": "RETRY"
+}
