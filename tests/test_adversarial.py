@@ -19,9 +19,17 @@ from agent.executors.simulated import SimulatedExecutor
 from agent.models import ErrorObj, Instrument, Method, PaymentFailure
 from agent.pipeline import ingest, process_case
 from agent.policy.engine import load_rules
+from agent.state import TERMINAL_STATES
 
 START = datetime(2026, 8, 1, tzinfo=timezone.utc)
-TERMINAL_STATES = {"RECOVERED", "ABANDONED", "HOLDOUT_CLOSED", "QUARANTINED"}
+# Derived from the transition table, not hand-listed — a local copy would keep
+# passing after the real state machine changed underneath it (ADR-020).
+# QUARANTINED gained reconciliation edges and is no longer terminal, but for the
+# adversarial safety claim it is still a "done" state: the case has left the
+# retry loop and awaits human/system review.  The invariant is "no case is stuck
+# in an active loop forever", not "every case is in a state with zero outgoing
+# edges".
+DONE_STATE_VALUES = {s.value for s in TERMINAL_STATES} | {"QUARANTINED"}
 
 
 def _ambiguous_card_case(i: int) -> PaymentFailure:
@@ -63,7 +71,7 @@ def test_adversarial_model_cannot_breach_caps_or_contaminate_holdout():
     for _round in range(max_rounds):
         for cid in case_ids:
             row = conn.execute("SELECT state FROM cases WHERE case_id = ?", (cid,)).fetchone()
-            if row["state"] in TERMINAL_STATES:
+            if row["state"] in DONE_STATE_VALUES:
                 continue
             tick += 1
             clock.set(START + timedelta(minutes=tick))
@@ -86,7 +94,7 @@ def test_adversarial_model_cannot_breach_caps_or_contaminate_holdout():
     for row in conn.execute("SELECT * FROM cases"):
         cap = params["by_method"].get(row["method"], params["default_cap"])
         assert row["attempts"] <= cap, f"{row['case_id']} spent {row['attempts']} attempts, cap is {cap}"
-        assert row["state"] in TERMINAL_STATES, row["state"]
+        assert row["state"] in DONE_STATE_VALUES, row["state"]
 
     # The adversarial damage bound: total spend across the whole adversarial batch
     # is bounded by n * max_cap, regardless of how the model behaves.

@@ -100,6 +100,11 @@ def evaluate(
             case_id=case.case_id,
             decision=decision,
             action=action,
+            # The attempt this verdict authorizes, fixed at decision time from the
+            # state actually evaluated. Binding it here — rather than letting the
+            # executor read `attempts` at dispatch — is what makes the idempotency
+            # key a property of the authorization instead of of the clock.
+            attempt_no=case.attempts + 1,
             execute_at=at,
             fired_rules=list(fired),
             reason=reason,

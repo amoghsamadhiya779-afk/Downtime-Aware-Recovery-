@@ -28,6 +28,18 @@ EVENTS = frozenset(
         "POLICY_VERDICT",
         "ACTION_DISPATCHED",
         "ACTION_RESULT",
+        # An executor refused to perform a dispatched action. Distinct from
+        # ACTION_RESULT: a refusal means nothing ran and no attempt was consumed,
+        # so conflating the two would corrupt the attempt-count replay.
+        "ACTION_REFUSED",
+        # The action was dispatched but the outcome is unknown — timeout or
+        # indeterminate provider response. Distinct from both ACTION_RESULT and
+        # ACTION_REFUSED: we don't know whether an attempt was consumed. The
+        # case must not be blindly retried; reconciliation is the only safe path.
+        "ACTION_UNCERTAIN",
+        # Reconciliation has verified the actual outcome of a previously uncertain
+        # action and transitioned the case accordingly.
+        "RECONCILIATION_RESOLVED",
         "STATE_TRANSITION",
     }
 )

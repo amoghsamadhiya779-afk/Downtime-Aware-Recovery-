@@ -1,12 +1,20 @@
-"""Case persistence and the state machine.
+"""Case persistence and the transaction/recovery state machine.
 
-CaseState transitions:
+    DETECTED ─┬─> DIAGNOSED ─┬─> SCHEDULED ─┬─> EXECUTING ─┬─> RECOVERED    (terminal)
+              │              │      ▲        │             ├─> FAILED_ATTEMPT
+              │              │      └────────┼─────────────┘      │
+              │              │  (retryable refusal)               │
+              │              ├─> HOLDOUT_CLOSED (terminal)        │
+              │              ├─> QUARANTINED    (terminal)  <─────┤ (terminal refusal)
+              │              └─> ABANDONED      (terminal)  <─────┘ (gave up)
+              ├─> ABANDONED   (terminal)
+              └─> QUARANTINED (terminal)
 
-    DETECTED -> DIAGNOSED -> SCHEDULED -> EXECUTING -+-> RECOVERED        (terminal)
-                                              ^        +-> ABANDONED       (terminal)
-                                              |        +-> FAILED_ATTEMPT -+
-                                              +----------------------------+
-    HOLDOUT_CLOSED (terminal, entered directly from DETECTED via HOLDOUT_GUARD)
+`VALID_TRANSITIONS` is the ONE source of truth: terminality is derived from it
+(a state with no outgoing edges is terminal) rather than being listed separately.
+Three copies of "which states are terminal" previously existed — an unused
+constant in agent/models.py, the empty sets here, and a hand-written set in
+tests/test_adversarial.py — which is three chances to drift. See DECISIONS.md ADR-020.
 
 Counters (`attempts`, `last_attempt_at`) are denormalised onto the row for the policy
 engine's convenience; `agent/audit.py:replay()` reconstructs the same numbers from the
@@ -19,26 +27,62 @@ import json
 import sqlite3
 from datetime import datetime
 
-from agent.models import Cohort, ErrorObj, Instrument, Method, PaymentFailure
+from agent.models import CaseState, Cohort, ErrorObj, Instrument, Method, PaymentFailure
 
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "DETECTED": {"DIAGNOSED", "ABANDONED", "QUARANTINED"},
-    # Diagnosis runs even on holdout cases (they traverse triage/diagnosis and are
-    # denied only at the policy step — HOLDOUT_GUARD), so HOLDOUT_CLOSED is reached
-    # from DIAGNOSED, not directly from DETECTED.
-    "DIAGNOSED": {"SCHEDULED", "ABANDONED", "HOLDOUT_CLOSED", "QUARANTINED"},
-    "SCHEDULED": {"EXECUTING", "ABANDONED"},
-    "EXECUTING": {"RECOVERED", "FAILED_ATTEMPT", "ABANDONED"},
-    "FAILED_ATTEMPT": {"DIAGNOSED", "SCHEDULED", "ABANDONED"},
-    "RECOVERED": set(),
-    "ABANDONED": set(),
-    "HOLDOUT_CLOSED": set(),
-    "QUARANTINED": set(),
+S = CaseState
+
+VALID_TRANSITIONS: dict[CaseState, frozenset[CaseState]] = {
+    # Signal ingested, nothing decided yet.
+    S.DETECTED: frozenset({S.DIAGNOSED, S.ABANDONED, S.QUARANTINED}),
+    # Classified. Diagnosis runs even on holdout cases (they traverse triage and
+    # diagnosis and are denied only at the policy step — HOLDOUT_GUARD), so
+    # HOLDOUT_CLOSED is reached from here, not directly from DETECTED (ADR-006).
+    S.DIAGNOSED: frozenset({S.SCHEDULED, S.ABANDONED, S.HOLDOUT_CLOSED, S.QUARANTINED}),
+    # Authorized and queued, not yet handed to an executor.
+    S.SCHEDULED: frozenset({S.EXECUTING, S.ABANDONED}),
+    # Dispatched. The two refusal edges below are what keep a refused command
+    # from stranding a case here: an executor that raises ActionRefused leaves
+    # EXECUTING with no other way out, and EXECUTING is not terminal (ADR-020).
+    S.EXECUTING: frozenset(
+        {
+            S.RECOVERED,  # attempt succeeded
+            S.FAILED_ATTEMPT,  # attempt ran and failed
+            S.ABANDONED,  # cancelled
+            S.SCHEDULED,  # retryable refusal — back to the queue for re-dispatch
+            S.QUARANTINED,  # terminal refusal — needs a human
+        }
+    ),
+    # Attempt ran and did not recover. Either re-diagnose for the next attempt or
+    # retry the same diagnosis; the attempt cap is what bounds this loop, not the
+    # state machine.
+    S.FAILED_ATTEMPT: frozenset({S.DIAGNOSED, S.SCHEDULED, S.ABANDONED}),
+    # --- terminal: no outgoing edges -------------------------------------------
+    S.RECOVERED: frozenset(),
+    S.ABANDONED: frozenset(),
+    S.HOLDOUT_CLOSED: frozenset(),
+    # Semantically "awaiting review / reconciliation". Previously terminal because
+    # no resolution path was implemented. Reconciliation now provides one: after
+    # verifying the actual outcome of an uncertain execution, a quarantined case
+    # transitions to the correct state. Terminality is derived, so adding these
+    # edges automatically stops QUARANTINED from being terminal (ADR-020).
+    S.QUARANTINED: frozenset({S.RECOVERED, S.FAILED_ATTEMPT, S.DIAGNOSED, S.ABANDONED}),
 }
+
+TERMINAL_STATES: frozenset[CaseState] = frozenset(
+    state for state, allowed in VALID_TRANSITIONS.items() if not allowed
+)
 
 
 class IllegalTransition(RuntimeError):
     pass
+
+
+def is_terminal(state: CaseState | str) -> bool:
+    return CaseState(state) in TERMINAL_STATES
+
+
+def allowed_transitions(state: CaseState | str) -> frozenset[CaseState]:
+    return VALID_TRANSITIONS[CaseState(state)]
 
 
 def create_case(conn: sqlite3.Connection, pf: PaymentFailure, cohort: Cohort) -> None:
@@ -58,7 +102,7 @@ def create_case(conn: sqlite3.Connection, pf: PaymentFailure, cohort: Cohort) ->
             pf.mandate_id,
             json.dumps(pf.error.model_dump(), sort_keys=True),
             cohort.value,
-            "DETECTED",
+            S.DETECTED.value,
         ),
     )
 
@@ -89,19 +133,29 @@ def to_payment_failure(row: sqlite3.Row) -> PaymentFailure:
 def transition(
     conn: sqlite3.Connection,
     case_id: str,
-    to_state: str,
+    to_state: CaseState | str,
     *,
     increment_attempt: bool = False,
     abandon_reason: str | None = None,
     last_attempt_at: datetime | None = None,
 ) -> None:
+    """Move a case to `to_state`, or raise IllegalTransition.
+
+    `to_state` is coerced to CaseState first, so a typo raises a ValueError naming
+    the bad value rather than an IllegalTransition, which would have been a
+    misleading diagnosis — the transition isn't illegal, the state doesn't exist.
+    """
+    target = CaseState(to_state)
     row = get_case(conn, case_id)
-    allowed = VALID_TRANSITIONS.get(row["state"], set())
-    if to_state not in allowed:
-        raise IllegalTransition(f"{row['state']} -> {to_state} is not permitted")
+    current = CaseState(row["state"])
+
+    allowed = VALID_TRANSITIONS[current]
+    if target not in allowed:
+        detail = "state is terminal" if not allowed else f"allowed: {sorted(s.value for s in allowed)}"
+        raise IllegalTransition(f"{current.value} -> {target.value} is not permitted ({detail})")
 
     sets = ["state = ?", "version = version + 1"]
-    params: list[object] = [to_state]
+    params: list[object] = [target.value]
     if increment_attempt:
         sets.append("attempts = attempts + 1")
     if abandon_reason is not None:

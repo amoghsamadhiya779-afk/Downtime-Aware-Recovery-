@@ -14,6 +14,7 @@ from agent.audit import append
 from agent.clock import Clock
 from agent.diagnosis.port import DiagnosisInput, DiagnosisPort
 from agent.downtime import DowntimeStore
+from agent.executors.contracts import ActionRefused, ExecutionUncertain
 from agent.executors.port import ExecutorPort
 from agent.ledger import assign_cohort
 from agent.models import (
@@ -145,15 +146,20 @@ def process_case(
         payload=proposal.model_dump(mode="json"),
         ts=now,
     )
-    transition(conn, case_id, "DIAGNOSED")
-    append(
-        conn,
-        case_id=case_id,
-        actor="pipeline",
-        event_type="STATE_TRANSITION",
-        payload={"to": "DIAGNOSED"},
-        ts=now,
-    )
+    # Guard: if the case was already DIAGNOSED (e.g. after reconciliation resolved
+    # an uncertain action back to DIAGNOSED), skip the self-transition which the
+    # state machine rightly forbids.
+    current_state = CaseState(get_case(conn, case_id)["state"])
+    if current_state is not CaseState.DIAGNOSED:
+        transition(conn, case_id, "DIAGNOSED")
+        append(
+            conn,
+            case_id=case_id,
+            actor="pipeline",
+            event_type="STATE_TRANSITION",
+            payload={"to": "DIAGNOSED"},
+            ts=now,
+        )
 
     row = get_case(conn, case_id)
     # Policy performs no I/O, so the caller supplies the state it needs to decide
@@ -222,7 +228,72 @@ def process_case(
         ts=now,
     )
     transition(conn, case_id, "EXECUTING")
-    result = executor.execute(verdict)
+    try:
+        result = executor.execute(verdict)
+    except ActionRefused as refusal:
+        # Without this, a refused command strands the case in EXECUTING — a
+        # non-terminal state whose only exits are transitions this function will
+        # never reach, because the exception escaped. ADR-019 gave the executor
+        # six raise paths; ADR-020 gives them somewhere to land.
+        #
+        # Retryable refusals (an in-flight duplicate, a transport error) go back
+        # to SCHEDULED for re-dispatch. Terminal ones cannot succeed on retry, so
+        # they go to a human rather than being silently abandoned.
+        landing = "SCHEDULED" if refusal.retryable else "QUARANTINED"
+        append(
+            conn,
+            case_id=case_id,
+            actor="executor",
+            event_type="ACTION_REFUSED",
+            payload={"code": refusal.code.value, "detail": refusal.detail, "retryable": refusal.retryable},
+            ts=clock.now(),
+        )
+        transition(conn, case_id, landing)
+        append(
+            conn,
+            case_id=case_id,
+            actor="pipeline",
+            event_type="STATE_TRANSITION",
+            payload={"to": landing, "reason": f"action refused: {refusal.code.value}"},
+            ts=clock.now(),
+        )
+        return DecisionTrace(
+            case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous,
+            proposal, verdict, None, landing,
+        )
+    except ExecutionUncertain as uncertain:
+        # The action was dispatched but the outcome is unknown.  This is NOT a
+        # refusal (nothing ran) and NOT a result (something definitely ran).
+        # Blindly retrying could double-spend.  Quarantine until reconciliation
+        # verifies the actual outcome.
+        append(
+            conn,
+            case_id=case_id,
+            actor="executor",
+            event_type="ACTION_UNCERTAIN",
+            payload={
+                "code": uncertain.code.value,
+                "detail": uncertain.detail,
+                "idempotency_key": uncertain.idempotency_key,
+            },
+            ts=clock.now(),
+        )
+        transition(conn, case_id, "QUARANTINED")
+        append(
+            conn,
+            case_id=case_id,
+            actor="pipeline",
+            event_type="STATE_TRANSITION",
+            payload={
+                "to": "QUARANTINED",
+                "reason": f"execution uncertain: {uncertain.code.value}",
+            },
+            ts=clock.now(),
+        )
+        return DecisionTrace(
+            case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous,
+            proposal, verdict, None, "QUARANTINED",
+        )
     append(
         conn,
         case_id=case_id,
