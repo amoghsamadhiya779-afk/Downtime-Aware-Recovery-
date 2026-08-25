@@ -61,7 +61,7 @@ def make_outcome_fn(ground_truth):
     return outcome_fn
 
 
-def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: str = "stub") -> str:
+def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: str = "stub", output_json: bool = False) -> str:
     load_dotenv()
     conn = agent_db.connect(db_path)
     rules = load_rules()
@@ -119,15 +119,30 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
     chain_ok = verify_chain(conn)
     counters_ok = all(verify_counters(conn, cid) for cid in case_ids)
 
-    report = build_report(
-        conn,
-        ground_truth,
-        seed=seed,
-        manifest=manifest,
-        chain_ok=chain_ok,
-        counters_ok=counters_ok,
-        rules=rules,
-    )
+    if output_json:
+        from evalharness.metrics import compute_all_metrics
+        import json
+        metrics = compute_all_metrics(
+            conn,
+            ground_truth,
+            seed=seed,
+            manifest=manifest,
+            chain_ok=chain_ok,
+            counters_ok=counters_ok,
+            rules=rules,
+        )
+        report = json.dumps(metrics, indent=2)
+    else:
+        report = build_report(
+            conn,
+            ground_truth,
+            seed=seed,
+            manifest=manifest,
+            chain_ok=chain_ok,
+            counters_ok=counters_ok,
+            rules=rules,
+        )
+    conn.close()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
     return report
@@ -146,8 +161,9 @@ def main() -> None:
         help="diagnosis backend. 'baseline' is the non-AI A1 ablation arm "
              "(context-blind fixed retry) — the thing the AI arms must beat.",
     )
+    ap.add_argument("--json", action="store_true", help="Output machine-readable JSON metrics instead of markdown report")
     args = ap.parse_args()
-    report = run(Path(args.db), Path(args.gt), Path(args.out), seed=args.seed, provider=args.provider)
+    report = run(Path(args.db), Path(args.gt), Path(args.out), seed=args.seed, provider=args.provider, output_json=args.json)
     print(report)
 
 
