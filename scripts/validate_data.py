@@ -1,3 +1,18 @@
+"""⚠️  DEPRECATED (ADR-024) — Validation is now handled by `evalharness/run.py`.
+
+This script validated the JSON output of `scripts/generate_data.py`, which is
+itself deprecated. The canonical evaluation pipeline (`datagen/generate.py` →
+SQLite → `evalharness/run.py`) validates data through Pydantic schema enforcement
+at ingest time and safety invariant assertions in the evaluation report. This file
+is retained for reference only.
+"""
+import warnings
+warnings.warn(
+    "scripts/validate_data.py is deprecated (ADR-024). Use 'python -m evalharness.run' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 """Dataset validator for the output of scripts/generate_data.py.
 
 Re-validates every record against the real Pydantic schema (agent.models,

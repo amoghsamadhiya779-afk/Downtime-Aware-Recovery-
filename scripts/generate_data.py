@@ -1,3 +1,21 @@
+"""⚠️  DEPRECATED (ADR-024) — Use `datagen/generate.py` + `scripts/gen.py` instead.
+
+This script was the original standalone JSON dataset generator. It has been
+superseded by `datagen/generate.py`, which produces SQLite corpora consumed
+directly by the evaluation harness (`evalharness/run.py`). This file is retained
+for reference only and will be removed in a future cleanup.
+
+Historical context: This script produced portable JSON files validated against
+Pydantic schemas. The canonical pipeline now uses `datagen/generate.py` →
+`agent.pipeline.ingest()` → SQLite → `evalharness/run.py` → `eval/report.md`.
+"""
+import warnings
+warnings.warn(
+    "scripts/generate_data.py is deprecated (ADR-024). Use 'python scripts/gen.py' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 """Standalone synthetic dataset generator for the approved schema (docs/02 — the
 Field | Type | Meaning | Required | Used by table).
 

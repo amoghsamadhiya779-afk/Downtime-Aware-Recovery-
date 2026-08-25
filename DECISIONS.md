@@ -850,3 +850,27 @@ Sequential evaluation loops over high-volume corpora triggered free-tier rate li
    - Extended `scripts/docs_check.py` to strictly enforce that all numeric claims across README.md match raw evaluation outputs.
 
 
+---
+
+## ADR-024: Deprecation of Standalone JSON Dataset Generator
+
+### Context
+
+Two independent dataset generators coexisted:
+
+1. **`datagen/generate.py`** → SQLite corpora → `evalharness/run.py` → `eval/report.md`. This is the canonical evaluation pipeline; all published numbers trace to it.
+2. **`scripts/generate_data.py`** → JSON files in `data/dataset/` → `scripts/validate_data.py`. This was the original generator, built before the evaluation harness existed. It produces a different schema, different distributions, and feeds no downstream consumer.
+
+Having two generators with unreconciled schemas, different code paths, and potentially different distributions confuses reviewers and creates a credibility risk: which numbers are authoritative?
+
+### Decision
+
+- **Deprecate** `scripts/generate_data.py` and `scripts/validate_data.py` with runtime `DeprecationWarning` and docstring notices.
+- **Retain** both files (no deletion) so historical context is preserved and the deprecation is visible in diffs.
+- **Canonical pipeline** is `datagen/generate.py` → `scripts/gen.py` → SQLite → `evalharness/run.py` → `eval/report*.md`.
+
+### Rejected
+
+- *Delete immediately*: Would lose the historical reference and make the ADR harder to trace.
+- *Unify into one generator*: The JSON format serves no active consumer; unification is effort without benefit.
+

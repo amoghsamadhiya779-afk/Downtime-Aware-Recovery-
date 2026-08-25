@@ -53,6 +53,34 @@ def run_smoke_tests() -> dict[str, tuple[str, str]]:
     db_path = ROOT_DIR / "data" / "dev.db"
 
     # =========================================================================
+    # 0. Start Background Dashboard Server if not running
+    # =========================================================================
+    server = None
+    server_thread = None
+    try:
+        import threading
+        from scripts.serve_dashboard import DashboardRequestHandler
+        from http.server import HTTPServer
+
+        # Check if already listening on port 8000
+        server_running = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=1):
+                server_running = True
+        except Exception:
+            pass
+
+        if not server_running:
+            DashboardRequestHandler.conn = agent_db.connect(db_path)
+            server = HTTPServer(("127.0.0.1", 8000), DashboardRequestHandler)
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            import time
+            time.sleep(0.3)
+    except Exception as e:
+        pass
+
+    # =========================================================================
     # 1. Startup & Configuration Verification
     # =========================================================================
     try:

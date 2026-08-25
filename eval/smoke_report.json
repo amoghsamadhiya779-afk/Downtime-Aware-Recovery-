@@ -4,66 +4,68 @@
     "seed": 42,
     "scenario": "S1",
     "n": 300,
-    "generator_version": "0.1.0"
+    "generator_version": "0.2.0",
+    "times_scored": 94,
+    "rescore_override": false
   },
   "incremental": {
-    "incremental_per_1000": 5266944.625550661,
-    "ci_lower": 2236886.1396415425,
-    "ci_upper": 7998325.225393761,
-    "gross_treated_rupees": 7576.654625550661,
-    "gross_holdout_rupees": 2309.71,
+    "incremental_per_1000": 3919258.7574678655,
+    "ci_lower": 1626642.437994085,
+    "ci_upper": 6112198.490133366,
+    "gross_treated_rupees": 5767.6402643171805,
+    "gross_holdout_rupees": 1848.3815068493152,
     "n_boot": 2000,
     "n_treated": 227,
     "n_holdout": 73
   },
   "gross": {
-    "treated_rate": 0.29515418502202645,
-    "holdout_rate": 0.0684931506849315
+    "treated_rate": 0.2290748898678414,
+    "holdout_rate": 0.0958904109589041
   },
   "ai": {
-    "macro_f1": 0.15079365079365079,
-    "n_ambiguous": 88,
+    "macro_f1": 0.3492552911359073,
+    "n_ambiguous": 103,
     "per_class": {
       "TRANSIENT_INFRA": {
-        "precision": 0.4318181818181818,
+        "precision": 0.05128205128205128,
         "recall": 1.0,
-        "f1": 0.6031746031746031,
-        "support": 38
+        "f1": 0.09756097560975609,
+        "support": 2
       },
       "CUSTOMER_FIXABLE": {
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "support": 20
+        "precision": 0.5142857142857142,
+        "recall": 0.6,
+        "f1": 0.5538461538461538,
+        "support": 30
       },
       "INSTRUMENT_INVALID": {
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "support": 14
+        "precision": 0.4,
+        "recall": 0.10526315789473684,
+        "f1": 0.16666666666666666,
+        "support": 19
       },
       "TERMINAL": {
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "support": 16
+        "precision": 0.9166666666666666,
+        "recall": 0.4230769230769231,
+        "f1": 0.5789473684210527,
+        "support": 52
       }
     }
   },
   "secondary": {
-    "wasted_attempt_rate": 0.06557377049180328,
-    "wasted_n": 12,
-    "total_attempts": 183,
+    "wasted_attempt_rate": 0.10650887573964497,
+    "wasted_n": 18,
+    "total_attempts": 169,
     "n_deferred": 0,
-    "n_abandoned": 49,
+    "n_abandoned": 60,
     "n_holdout_closed": 73
   },
   "safety": {
     "holdout_contamination": 0,
     "cap_breach": 0,
-    "veto_rate": 0.23045267489711935,
-    "veto_n": 56,
-    "veto_total": 243
+    "veto_rate": 0.25327510917030566,
+    "veto_n": 58,
+    "veto_total": 229
   },
   "system": {
     "chain_ok": true,
