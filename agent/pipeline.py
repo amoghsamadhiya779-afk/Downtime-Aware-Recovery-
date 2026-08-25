@@ -8,6 +8,7 @@ and ExecutorPort are injected here — nothing in this file branches on mode.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass
 
 from agent.audit import append
@@ -23,6 +24,7 @@ from agent.models import (
     CaseView,
     Cohort,
     Decision,
+    DecisionRecord,
     DiagnosisProposal,
     ExpectedOutcome,
     PaymentFailure,
@@ -90,6 +92,36 @@ def process_case(
     row = get_case(conn, case_id)
     pf = to_payment_failure(row)
     now = clock.now()
+
+    def _finalize(trace: DecisionTrace) -> DecisionTrace:
+        exec_res = None
+        if trace.action_succeeded is True:
+            exec_res = "SUCCESS"
+        elif trace.action_succeeded is False:
+            exec_res = "FAILED"
+        elif trace.final_state == "QUARANTINED" and trace.verdict.is_executable:
+            exec_res = "UNCERTAIN_OR_REFUSED"
+            
+        record = DecisionRecord(
+            event_id=str(uuid.uuid4()),
+            transaction_id=trace.case_id,
+            timestamp=clock.now().isoformat(),
+            actor="pipeline",
+            ai_proposal=trace.diagnosis.model_dump(mode="json") if trace.diagnosis else None,
+            policy_decision=trace.verdict.decision.value,
+            execution_result=exec_res,
+            reason=trace.verdict.reason,
+            policy_version=trace.verdict.rules_version,
+        )
+        append(
+            conn,
+            case_id=case_id,
+            actor="pipeline",
+            event_type="DECISION_RECORDED",
+            payload=record.model_dump(mode="json"),
+            ts=clock.now(),
+        )
+        return trace
 
     tr = run_triage(pf.error.reason)
     append(conn, case_id=case_id, actor="triage", event_type="TRIAGE_RESULT", payload=tr.as_payload(), ts=now)
@@ -214,7 +246,7 @@ def process_case(
             payload={"to": final, "reason": verdict.reason},
             ts=now,
         )
-        return DecisionTrace(case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous, proposal, verdict, None, final)
+        return _finalize(DecisionTrace(case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous, proposal, verdict, None, final))
 
     # Executable: ALLOW or DEFER with action RETRY.
     transition(conn, case_id, "SCHEDULED")
@@ -257,10 +289,10 @@ def process_case(
             payload={"to": landing, "reason": f"action refused: {refusal.code.value}"},
             ts=clock.now(),
         )
-        return DecisionTrace(
+        return _finalize(DecisionTrace(
             case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous,
             proposal, verdict, None, landing,
-        )
+        ))
     except ExecutionUncertain as uncertain:
         # The action was dispatched but the outcome is unknown.  This is NOT a
         # refusal (nothing ran) and NOT a result (something definitely ran).
@@ -290,10 +322,10 @@ def process_case(
             },
             ts=clock.now(),
         )
-        return DecisionTrace(
+        return _finalize(DecisionTrace(
             case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous,
             proposal, verdict, None, "QUARANTINED",
-        )
+        ))
     append(
         conn,
         case_id=case_id,
@@ -312,4 +344,4 @@ def process_case(
     )
     append(conn, case_id=case_id, actor="pipeline", event_type="STATE_TRANSITION", payload={"to": final}, ts=clock.now())
 
-    return DecisionTrace(case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous, proposal, verdict, result.succeeded, final)
+    return _finalize(DecisionTrace(case_id, view.cohort, tr.recoverability.value, tr.is_ambiguous, proposal, verdict, result.succeeded, final))

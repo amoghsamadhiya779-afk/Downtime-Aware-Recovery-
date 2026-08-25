@@ -359,3 +359,19 @@ class ActionResult(BaseModel):
     @property
     def succeeded(self) -> bool:
         return self.outcome is ActionOutcome.SUCCEEDED
+
+
+class DecisionRecord(BaseModel):
+    """Unified audit event for reporting."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    transaction_id: str
+    timestamp: str
+    actor: str
+    ai_proposal: dict | None
+    policy_decision: str
+    execution_result: str | None
+    reason: str
+    policy_version: int
