@@ -6,6 +6,7 @@ which is enforced by type signature rather than convention.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from enum import Enum
 
@@ -40,10 +41,18 @@ class Action(str, Enum):
 
 
 class Decision(str, Enum):
-    ALLOW = "ALLOW"
-    DEFER = "DEFER"
-    DOWNGRADE = "DOWNGRADE"
-    DENY = "DENY"
+    """The three authorization outcomes.
+
+    Deliberately not four: DEFER used to be a separate decision, but "permitted,
+    later" is ALLOW with a later `execute_at` — the timing lives in the Verdict's
+    own field and the fact that deferral happened lives in `fired_rules`, which is
+    where the eval harness already reads it from. DOWNGRADE was never returned by
+    any rule and is gone. Fewer outcomes means fewer states a caller can mishandle.
+    """
+
+    ALLOW = "ALLOW"  # authorized; execute_at says when
+    DENY = "DENY"  # not authorized, and no human is being asked
+    REVIEW = "REVIEW"  # not authorized automatically; routed to a human queue
 
 
 class Cohort(str, Enum):
@@ -152,23 +161,101 @@ class DowntimeContext(BaseModel):
     window_id: str | None = None
 
 
+class RiskCategory(str, Enum):
+    """Closed vocabulary for self-flagged risk — never free text. A model that
+    could write an arbitrary risk description could smuggle an instruction through
+    the audit trail; a model choosing from a fixed list cannot."""
+
+    STALE_SIGNAL = "STALE_SIGNAL"  # downtime/context data may be out of date
+    CUSTOMER_FATIGUE = "CUSTOMER_FATIGUE"  # repeated contact/attempt on this customer
+    AMOUNT_SENSITIVITY = "AMOUNT_SENSITIVITY"  # cost of being wrong scales with amount
+    LOW_SAMPLE_CONFIDENCE = "LOW_SAMPLE_CONFIDENCE"  # thin basis for this reason/context combo
+    COMPLIANCE_BOUNDARY = "COMPLIANCE_BOUNDARY"  # close to an attempt/window/contact limit
+    AMBIGUOUS_SIGNAL = "AMBIGUOUS_SIGNAL"  # input itself contains conflicting evidence
+    OTHER = "OTHER"
+
+
+class MissingInfoCategory(str, Enum):
+    """What the model would have wanted but the input didn't carry. Also closed —
+    this is a diagnostic signal for the input pipeline and the human-review queue,
+    not a channel for the model to ask for arbitrary data."""
+
+    CUSTOMER_CONTACT_HISTORY = "CUSTOMER_CONTACT_HISTORY"
+    PRIOR_METHOD_SUCCESS_RATE = "PRIOR_METHOD_SUCCESS_RATE"
+    DOWNTIME_CONFIRMATION = "DOWNTIME_CONFIRMATION"
+    ACCOUNT_STANDING = "ACCOUNT_STANDING"
+    MERCHANT_RISK_PROFILE = "MERCHANT_RISK_PROFILE"
+    OTHER = "OTHER"
+
+
+class RiskFlag(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    category: RiskCategory
+    note: str = Field(max_length=140)
+
+
+class ExpectedOutcome(BaseModel):
+    """The model's own testable prediction, separate from `confidence`.
+
+    `confidence` is how sure the model is about the *diagnosis* (the classification).
+    `probability_of_success` is how likely the model thinks its *proposed action*
+    is to actually work — a different axis. A model can be highly confident this is
+    TRANSIENT_INFRA while still estimating only even odds that one retry clears it.
+    Recorded so it becomes checkable against real outcomes later (Phase 3
+    calibration) — never gated on directly (invariant 5 covers `confidence`;
+    the same discipline applies here by extension).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    probability_of_success: float = Field(ge=0.0, le=1.0)
+    horizon_minutes: int = Field(ge=0)  # by when the outcome should be observable
+
+
 class DiagnosisProposal(BaseModel):
     """AI-1 output. A proposal, never an authorization.
 
     `confidence` here is the raw model-reported value. Invariant 5: it never gates.
     Policy consumes `calibrated_confidence`, which Phase 3 fits; until then the
     calibrator is identity and is labelled as such in the report.
+
+    `evidence`, `risks`, and `missing_information` have no default — every response
+    must state them explicitly, even as an empty list, rather than silently omit
+    them. A required-but-possibly-empty field forces the model to engage with the
+    question on every call; an optional field with a default lets it go unanswered
+    without anyone noticing.
+
+    `proposed_action` is a closed three-value enum, never a free string — there is
+    no execution-command channel anywhere in this schema. `risks` and
+    `missing_information` are closed enums for the same reason: a field a model
+    could fill with arbitrary text is a field that could carry an instruction
+    through the audit trail undetected.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    recoverability: Recoverability
+    recoverability: Recoverability  # the diagnosis
     confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str]
     proposed_action: Action
     proposed_delay_minutes: int | None = Field(default=None, ge=0)
+    expected_outcome: ExpectedOutcome
+    risks: list[RiskFlag]
+    missing_information: list[MissingInfoCategory]
     rationale: str = Field(max_length=280)
-    evidence: list[str] = Field(default_factory=list)
     fallback_tier: int = Field(default=0, ge=0, le=3)  # 0 = model answered first try
+
+
+def idempotency_key(case_id: str, action: "Action", attempt_no: int) -> str:
+    """Stable identity for one logical action.
+
+    Lives here rather than in agent/executors/ so the policy engine can compute a
+    prospective key for DUPLICATE_ACTION without importing an executor — policy
+    must not depend on the layer it authorizes. The executor imports this same
+    function, so there is exactly one definition and the two cannot drift.
+    """
+    return hashlib.sha256(f"{case_id}:{action.value}:{attempt_no}".encode()).hexdigest()
 
 
 class CaseView(BaseModel):
@@ -187,10 +274,24 @@ class CaseView(BaseModel):
     amount_paise: int
     is_recurring: bool
     state: CaseState
+    # Idempotency keys of actions already executed for this case. Supplied by the
+    # caller (which owns the database) so DUPLICATE_ACTION can be decided without
+    # policy performing I/O. Defaults empty: a caller that doesn't supply it gets
+    # no duplicate protection from this layer, which is why the executor keeps its
+    # own independent unique-index check rather than trusting policy alone.
+    executed_action_keys: frozenset[str] = frozenset()
 
 
 class Verdict(BaseModel):
-    """The only type an executor accepts (invariant 8)."""
+    """The only type an executor accepts (invariant 8).
+
+    Every decision carries the four things needed to audit it after the fact:
+    which rules fired, why, which policy version produced it, and when it was
+    decided. `rules_version` and `decided_at` have no defaults on purpose —
+    constructing a Verdict outside the policy engine is then a deliberate act
+    that must supply both, rather than something that can happen by accident and
+    silently produce an authorization nothing actually authorized.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -200,11 +301,12 @@ class Verdict(BaseModel):
     execute_at: datetime | None = None
     fired_rules: list[str] = Field(default_factory=list)
     reason: str = ""
-    rules_version: int = 0
+    rules_version: int
+    decided_at: datetime
 
     @property
     def is_executable(self) -> bool:
-        return self.decision in (Decision.ALLOW, Decision.DEFER) and self.action != Action.STOP
+        return self.decision is Decision.ALLOW and self.action is not Action.STOP
 
 
 class ActionResult(BaseModel):

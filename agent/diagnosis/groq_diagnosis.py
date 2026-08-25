@@ -27,6 +27,15 @@ from agent.models import DiagnosisProposal
 
 MODEL = "openai/gpt-oss-120b"
 TIMEOUT_SECONDS = 8
+# gpt-oss-120b is a reasoning model: hidden reasoning tokens count against
+# max_tokens. Confirmed live this session — at max_tokens=400 with no
+# reasoning_effort set, ~90% of the budget (350-398 tokens) went to reasoning and
+# every real call hit finish_reason="length" with truncated/empty JSON, silently
+# falling through to the tier-3 fail-closed path on every single request. Fixed by
+# capping reasoning effort and giving the larger schema (added this session: nested
+# expected_outcome, risks[], missing_information[]) more room to actually answer.
+MAX_TOKENS = 600
+REASONING_EFFORT = "low"
 
 
 class GroqDiagnosis:
@@ -41,26 +50,29 @@ class GroqDiagnosis:
         client = Groq(api_key=self._api_key, timeout=TIMEOUT_SECONDS)
         resp = client.chat.completions.create(
             model=MODEL,
-            max_tokens=400,
+            max_tokens=MAX_TOKENS,
+            reasoning_effort=REASONING_EFFORT,
             messages=[
                 {"role": "system", "content": prompting.SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
         )
-        return resp.choices[0].message.content
+        return resp.choices[0].message.content or ""
 
     def diagnose(self, inp: DiagnosisInput) -> DiagnosisProposal:
         prompt = prompting.build_prompt(inp)
         fields = prompting.evidence_fields(inp)
 
+        last_error: str | None = None
         for attempt in range(2):  # tier 1: try, then one repair
             try:
                 raw = self._call(prompt if attempt == 0 else prompt + prompting.REPAIR_SUFFIX)
                 return prompting.validate(raw, fields)
-            except Exception:
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
                 continue
 
-        fallback = prompting.tier2_fallback(inp)
+        fallback = prompting.tier2_fallback(inp, last_error)
         if fallback is not None:
             return fallback
-        return prompting.tier3_fallback(inp)
+        return prompting.tier3_fallback(inp, last_error)

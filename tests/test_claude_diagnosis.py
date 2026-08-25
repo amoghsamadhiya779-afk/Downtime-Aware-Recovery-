@@ -69,10 +69,13 @@ def _valid_json(**overrides) -> str:
     payload = {
         "recoverability": "TRANSIENT_INFRA",
         "confidence": 0.8,
+        "evidence": ["error.reason", "downtime.active"],
         "proposed_action": "RETRY",
         "proposed_delay_minutes": 30,
+        "expected_outcome": {"probability_of_success": 0.6, "horizon_minutes": 30},
+        "risks": [],
+        "missing_information": [],
         "rationale": "issuer looks degraded",
-        "evidence": ["error.reason", "downtime.active"],
     }
     payload.update(overrides)
     return json.dumps(payload)

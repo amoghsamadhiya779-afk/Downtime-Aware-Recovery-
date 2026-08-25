@@ -39,7 +39,10 @@ def test_duplicate_execution_does_not_double_spend():
         return 1.0  # always succeeds, IF actually drawn
 
     executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(0))
-    verdict = Verdict(case_id=case_id, decision=Decision.ALLOW, action=Action.RETRY, execute_at=NOW)
+    verdict = Verdict(
+        case_id=case_id, decision=Decision.ALLOW, action=Action.RETRY, execute_at=NOW,
+        rules_version=1, decided_at=NOW,
+    )
 
     first = executor.execute(verdict)
     second = executor.execute(verdict)
@@ -69,7 +72,10 @@ def test_different_attempt_numbers_are_not_deduplicated():
         return 1.0
 
     executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(0))
-    verdict = Verdict(case_id=case_id, decision=Decision.ALLOW, action=Action.RETRY, execute_at=NOW)
+    verdict = Verdict(
+        case_id=case_id, decision=Decision.ALLOW, action=Action.RETRY, execute_at=NOW,
+        rules_version=1, decided_at=NOW,
+    )
 
     first = executor.execute(verdict)
     conn.execute("UPDATE cases SET attempts = attempts + 1 WHERE case_id = ?", (case_id,))

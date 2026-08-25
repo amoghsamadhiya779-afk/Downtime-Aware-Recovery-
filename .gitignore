@@ -10,4 +10,4 @@ __pycache__/
 # Generated artefacts
 data/
 *.db
-eval/report.md
+eval/report*.md

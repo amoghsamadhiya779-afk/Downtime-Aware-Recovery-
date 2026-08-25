@@ -5,31 +5,58 @@
 # Such rules still execute, but no compliance claim may be made from them anywhere
 # in the README, architecture doc, or pitch video until EVIDENCE.md carries a
 # primary source. See EVIDENCE.md E12-E15.
+#
+# VERSION 2 (was 1): adds REQUIRED_STATE, SUPPORTED_ACTION and DUPLICATE_ACTION,
+# enables EV_FLOOR and CONFIDENCE_FLOOR, and renumbers as a result. Version 1's
+# comment promised that enabling a reserved rule would never renumber the others —
+# that promise held for *enabling*, but three genuinely new gates had to go ahead
+# of them, so the version bump is doing exactly the job it exists for: every
+# Verdict records `rules_version`, so decisions made under v1 stay interpretable.
 
-version: 1
+version: 2
 
-# Global halt. Checked twice independently: policy rule 1, and again pre-dispatch
-# in the executor, so a single missed check cannot let an action through.
+# Global halt. Rule 3 below. Also intended to be checked pre-dispatch in the
+# executor (Phase 2) — one missed check should not let an action through.
 kill_switch: false
 
 # Fraction of cases held back and never acted upon. Measurement integrity.
 holdout_fraction: 0.25
 
 rules:
-  - id: KILL_SWITCH
+  # --- input validity: can this decision be made at all? ----------------------
+  - id: REQUIRED_STATE
     order: 1
+    enabled: true
+    verified: true
+    citation: "structural — a terminal-state case submitted for authorization is a bug"
+    params:
+      actionable_states: [DIAGNOSED, FAILED_ATTEMPT]
+
+  - id: SUPPORTED_ACTION
+    order: 2
+    enabled: true
+    verified: true
+    citation: "structural — see DECISIONS.md ADR-015"
+    params:
+      supported: [RETRY, STOP]
+
+  # --- operator override ------------------------------------------------------
+  - id: KILL_SWITCH
+    order: 3
     enabled: true
     verified: true
     citation: "operational — see ARCHITECTURE.md §9"
 
+  # --- measurement integrity --------------------------------------------------
   - id: HOLDOUT_GUARD
-    order: 2
+    order: 4
     enabled: true
     verified: true
     citation: "measurement integrity — PRODUCT_THESIS.md primary KPI"
 
+  # --- business gates ---------------------------------------------------------
   - id: TERMINAL_CLASS
-    order: 3
+    order: 5
     enabled: true
     verified: true
     citation: "thesis — stop early on unrecoverable failures"
@@ -37,7 +64,7 @@ rules:
       deny_classes: [TERMINAL, UNKNOWN]
 
   - id: ATTEMPT_CAP
-    order: 4
+    order: 6
     enabled: true
     verified: false          # <-- EVIDENCE.md E12, secondhand
     citation: null
@@ -49,8 +76,40 @@ rules:
         card: 4
         netbanking: 4
 
+  - id: DUPLICATE_ACTION
+    order: 7
+    enabled: true
+    verified: true
+    citation: "structural — at-least-once delivery makes this a real recurring condition"
+
+  - id: EV_FLOOR
+    order: 8
+    enabled: true
+    verified: true
+    citation: "economics — merchant-side cost model"
+    params:
+      # Cost of performing one recovery attempt, in paise.
+      action_cost_paise: 500
+      # DELIBERATELY a constant, not the model's own
+      # expected_outcome.probability_of_success: letting the model supply the
+      # probability would let it inflate its way past a financial control simply
+      # by claiming a higher chance of success. See DECISIONS.md ADR-017.
+      assumed_success_rate: 0.30
+
+  - id: CONFIDENCE_FLOOR
+    order: 9
+    enabled: true
+    verified: true
+    citation: "uncertainty routes to a human, not to a blind retry"
+    params:
+      # Compared against CALIBRATED confidence, never the raw model number
+      # (CLAUDE.md invariant 5). The calibrator is identity until Phase 3 fits a
+      # real one, and evaluate() labels it as such.
+      min_calibrated_confidence: 0.40
+
+  # --- timing, not a gate -----------------------------------------------------
   - id: DOWNTIME_DEFER
-    order: 5
+    order: 10
     enabled: true
     verified: true
     citation: "Razorpay Payment Downtime entity — EVIDENCE.md E6/E8"
@@ -58,45 +117,38 @@ rules:
       jitter_seconds: 300
       unknown_end_backoff_minutes: 90
       min_delay_minutes: 15
+      # Upper bound on any scheduled delay. proposed_delay_minutes is an
+      # LLM-controlled unbounded integer that flows into timedelta(); without a
+      # clamp a large enough value overflows and crashes the policy function.
+      # See DECISIONS.md ADR-017.
+      max_delay_minutes: 10080   # 7 days
 
   # ---------------------------------------------------------------------------
-  # Reserved for Phase 2. Ids and order are fixed NOW so that enabling them later
-  # never renumbers the rules above and never changes evaluation order.
+  # Reserved for a later phase. Still disabled; evaluate() has no branch reading
+  # any of these, so enabling one here does nothing until it is implemented.
   # ---------------------------------------------------------------------------
   - id: CONTACT_CAP
-    order: 6
+    order: 11
     enabled: false
     verified: false
     citation: null
 
   - id: EXECUTION_WINDOW
-    order: 7
+    order: 12
     enabled: false
     verified: false          # <-- EVIDENCE.md E13, secondhand
     citation: null
 
   - id: QUIET_HOURS
-    order: 8
+    order: 13
     enabled: false
     verified: false          # <-- EVIDENCE.md E15, unsourced
     citation: null
 
   - id: COOLDOWN
-    order: 9
+    order: 14
     enabled: false
     verified: true
     citation: "configuration, not regulation"
     params:
       min_hours_between_attempts: 6
-
-  - id: EV_FLOOR
-    order: 10
-    enabled: false
-    verified: true
-    citation: "economics"
-
-  - id: CONFIDENCE_FLOOR
-    order: 11
-    enabled: false
-    verified: true
-    citation: "requires a fitted calibrator — Phase 3"

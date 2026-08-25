@@ -11,6 +11,7 @@ you have an API key for.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,25 @@ DATA_DIR = Path("data")
 EVAL_DIR = Path("eval")
 
 
+def load_dotenv(path: Path = Path(".env")) -> None:
+    """Minimal .env loader — no python-dotenv dependency for ~8 lines of parsing.
+
+    Without this, `--provider groq|claude` silently produced a fully failed-closed
+    run: every ambiguous case fell to tier-3 UNKNOWN with
+    "GroqError: The api_key client option must be set", scoring macro-F1 0.000 and
+    looking like a catastrophic model result rather than a missing key. Existing
+    environment variables win, so CI or a shell export still overrides the file.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 def make_outcome_fn(ground_truth):
     def outcome_fn(verdict):
         gt = ground_truth[verdict.case_id]
@@ -42,6 +62,7 @@ def make_outcome_fn(ground_truth):
 
 
 def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: str = "stub") -> str:
+    load_dotenv()
     conn = agent_db.connect(db_path)
     rules = load_rules()
     manifest, ground_truth = read_ground_truth(gt_path)
@@ -53,6 +74,16 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
     outcome_fn = make_outcome_fn(ground_truth)
     executor = SimulatedExecutor(conn, clock, outcome_fn, random.Random(seed))
 
+    # Fail fast on a missing key rather than letting every case fall to tier-3
+    # UNKNOWN and reporting it as a model result — see load_dotenv's docstring.
+    required_key = {"groq": "GROQ_API_KEY", "claude": "ANTHROPIC_API_KEY"}.get(provider)
+    if required_key and not os.environ.get(required_key):
+        raise SystemExit(
+            f"--provider {provider} needs {required_key}, which is not set and was not "
+            f"found in .env. Refusing to run: without it every diagnosis fails closed "
+            f"to UNKNOWN and the report would look like a model failure, not a config one."
+        )
+
     if provider == "claude":
         from agent.diagnosis.claude import ClaudeDiagnosis
 
@@ -61,6 +92,10 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
         from agent.diagnosis.groq_diagnosis import GroqDiagnosis
 
         diagnosis_port = GroqDiagnosis()
+    elif provider == "baseline":
+        from agent.diagnosis.baseline import BaselineDiagnosis
+
+        diagnosis_port = BaselineDiagnosis()
     else:
         diagnosis_port = StubDiagnosis()
 
@@ -104,7 +139,13 @@ def main() -> None:
     ap.add_argument("--gt", default=str(DATA_DIR / "dev_ground_truth.jsonl"))
     ap.add_argument("--out", default=str(EVAL_DIR / "report.md"))
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--provider", choices=["stub", "claude", "groq"], default="stub", help="diagnosis backend")
+    ap.add_argument(
+        "--provider",
+        choices=["stub", "baseline", "claude", "groq"],
+        default="stub",
+        help="diagnosis backend. 'baseline' is the non-AI A1 ablation arm "
+             "(context-blind fixed retry) — the thing the AI arms must beat.",
+    )
     args = ap.parse_args()
     report = run(Path(args.db), Path(args.gt), Path(args.out), seed=args.seed, provider=args.provider)
     print(report)

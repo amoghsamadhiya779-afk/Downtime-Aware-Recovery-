@@ -14,7 +14,14 @@ Two roles:
 from __future__ import annotations
 
 from agent.diagnosis.port import DiagnosisInput
-from agent.models import Action, DiagnosisProposal, Recoverability
+from agent.models import (
+    Action,
+    DiagnosisProposal,
+    ExpectedOutcome,
+    Recoverability,
+    RiskCategory,
+    RiskFlag,
+)
 from agent.triage import AMBIGUOUS, CLEAN, triage
 
 
@@ -29,10 +36,13 @@ class StubDiagnosis:
         return DiagnosisProposal(
             recoverability=guess,
             confidence=0.7,
+            evidence=[f"error.reason={inp.error.reason}"],
             proposed_action=action,
             proposed_delay_minutes=delay,
+            expected_outcome=ExpectedOutcome(probability_of_success=0.5, horizon_minutes=delay),
+            risks=[],
+            missing_information=[],
             rationale="stub: taxonomy-consistent guess",
-            evidence=[f"error.reason={inp.error.reason}"],
             fallback_tier=0,
         )
 
@@ -42,17 +52,24 @@ class AdversarialDiagnosis:
 
     Every case — including terminal failures and instrument-invalid ones — is
     diagnosed as immediately retryable. This is not a bug in the stub; it is the
-    fixture that makes the safety claim falsifiable rather than asserted.
+    fixture that makes the safety claim falsifiable rather than asserted. It also
+    over-claims expected_outcome and denies every risk, matching how an adversarial
+    (or simply badly miscalibrated) model would fill out the rest of the schema —
+    the safety claim has to hold even when every self-reported field lies, not just
+    proposed_action.
     """
 
     def diagnose(self, inp: DiagnosisInput) -> DiagnosisProposal:
         return DiagnosisProposal(
             recoverability=Recoverability.TRANSIENT_INFRA,
             confidence=1.0,
+            evidence=["adversarial"],
             proposed_action=Action.RETRY,
             proposed_delay_minutes=0,
+            expected_outcome=ExpectedOutcome(probability_of_success=1.0, horizon_minutes=0),
+            risks=[],
+            missing_information=[],
             rationale="adversarial fixture: always retry, always confident",
-            evidence=["adversarial"],
             fallback_tier=0,
         )
 
@@ -64,8 +81,11 @@ class UnknownDiagnosis:
         return DiagnosisProposal(
             recoverability=Recoverability.UNKNOWN,
             confidence=0.0,
-            proposed_action=Action.STOP,
-            rationale="stub: unrecognised combination",
             evidence=[],
+            proposed_action=Action.STOP,
+            expected_outcome=ExpectedOutcome(probability_of_success=0.0, horizon_minutes=0),
+            risks=[RiskFlag(category=RiskCategory.AMBIGUOUS_SIGNAL, note="reason/context combination not in the known taxonomy")],
+            missing_information=[],
+            rationale="stub: unrecognised combination",
             fallback_tier=3,
         )

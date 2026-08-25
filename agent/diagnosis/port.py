@@ -24,6 +24,7 @@ class DiagnosisInput:
         "prior_failures",
         "downtime",
         "contact_count_7d",
+        "is_recurring",
     )
 
     def __init__(
@@ -36,6 +37,7 @@ class DiagnosisInput:
         prior_failures: int,
         downtime: DowntimeContext,
         contact_count_7d: int = 0,
+        is_recurring: bool = False,
     ) -> None:
         self.method = method
         self.error = error
@@ -44,6 +46,12 @@ class DiagnosisInput:
         self.prior_failures = prior_failures
         self.downtime = downtime
         self.contact_count_7d = contact_count_7d
+        # Available on PaymentFailure/pipeline since Phase 1 but never reached the
+        # model until now — a mandate-linked failure has a materially different
+        # profile (NPCI retry constraints, billing-cycle patterns) than a one-off
+        # checkout failure, and the diagnosis layer had no way to know which one
+        # it was looking at.
+        self.is_recurring = is_recurring
 
 
 class DiagnosisPort(Protocol):

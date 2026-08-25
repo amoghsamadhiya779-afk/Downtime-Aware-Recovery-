@@ -10,16 +10,16 @@ delivery safe.
 
 from __future__ import annotations
 
-import hashlib
 import random
 import sqlite3
 
 from agent.clock import Clock
-from agent.models import Action, ActionResult, Verdict
+from agent.models import Action, ActionResult, Verdict, idempotency_key
 
-
-def idempotency_key(case_id: str, action: Action, attempt_no: int) -> str:
-    return hashlib.sha256(f"{case_id}:{action.value}:{attempt_no}".encode()).hexdigest()
+# Re-exported for callers that imported it from here before it moved to
+# agent/models.py (where the policy engine can also reach it without importing
+# an executor). One definition, two consumers, no drift.
+__all__ = ["SimulatedExecutor", "idempotency_key"]
 
 
 class SimulatedExecutor:

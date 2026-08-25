@@ -21,6 +21,7 @@ from agent.models import (
     Decision,
     DiagnosisProposal,
     DowntimeContext,
+    ExpectedOutcome,
     Instrument,
     Recoverability,
 )
@@ -49,10 +50,13 @@ def _proposal(recoverability=Recoverability.TRANSIENT_INFRA, action=Action.RETRY
     return DiagnosisProposal(
         recoverability=recoverability,
         confidence=confidence,
+        evidence=[],
         proposed_action=action,
         proposed_delay_minutes=delay,
+        expected_outcome=ExpectedOutcome(probability_of_success=0.5, horizon_minutes=delay),
+        risks=[],
+        missing_information=[],
         rationale="test",
-        evidence=[],
     )
 
 
@@ -104,7 +108,9 @@ def test_downtime_defer_schedules_strictly_after_end():
         expected_end=NOW + timedelta(hours=1),
     )
     v = evaluate(proposal, case, RULES, NOW, ctx)
-    assert v.decision == Decision.DEFER
+    # Deferral is an ALLOW with a later execute_at — the fact that it happened
+    # lives in fired_rules, not in a separate decision value.
+    assert v.decision == Decision.ALLOW
     assert "DOWNTIME_DEFER" in v.fired_rules
     assert v.execute_at is not None and v.execute_at > ctx.expected_end
 
@@ -114,7 +120,8 @@ def test_downtime_defer_applies_backoff_when_end_unknown():
     proposal = _proposal(delay=5)
     ctx = DowntimeContext(active=True, severity="high", scheduled=False, instrument_match=True, expected_end=None)
     v = evaluate(proposal, case, RULES, NOW, ctx)
-    assert v.decision == Decision.DEFER
+    assert v.decision == Decision.ALLOW
+    assert "DOWNTIME_DEFER" in v.fired_rules
     backoff = RULES.params("DOWNTIME_DEFER")["unknown_end_backoff_minutes"]
     assert v.execute_at == NOW + timedelta(minutes=backoff)
 

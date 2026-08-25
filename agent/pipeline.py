@@ -21,7 +21,9 @@ from agent.models import (
     CaseState,
     CaseView,
     Cohort,
+    Decision,
     DiagnosisProposal,
+    ExpectedOutcome,
     PaymentFailure,
     Recoverability,
     Verdict,
@@ -101,6 +103,7 @@ def process_case(
             attempt_no=pf.attempt_no,
             prior_failures=row["attempts"],
             downtime=dctx,
+            is_recurring=pf.is_recurring,
         )
         proposal = diagnosis_port.diagnose(inp)
     elif tr.matched == "clean":
@@ -109,10 +112,13 @@ def process_case(
         proposal = DiagnosisProposal(
             recoverability=tr.recoverability,
             confidence=1.0,
+            evidence=[f"error.reason={pf.error.reason}"],
             proposed_action=action,
             proposed_delay_minutes=15,
+            expected_outcome=ExpectedOutcome(probability_of_success=0.5, horizon_minutes=15),
+            risks=[],
+            missing_information=[],
             rationale="triage: clean taxonomy match",
-            evidence=[f"error.reason={pf.error.reason}"],
             fallback_tier=0,
         )
     else:
@@ -121,10 +127,13 @@ def process_case(
         proposal = DiagnosisProposal(
             recoverability=Recoverability.UNKNOWN,
             confidence=0.0,
+            evidence=[f"error.reason={pf.error.reason}"],
             proposed_action=Action.STOP,
             proposed_delay_minutes=0,
+            expected_outcome=ExpectedOutcome(probability_of_success=0.0, horizon_minutes=0),
+            risks=[],
+            missing_information=[],
             rationale="triage: unseen combination — failing closed",
-            evidence=[f"error.reason={pf.error.reason}"],
             fallback_tier=0,
         )
 
@@ -147,6 +156,16 @@ def process_case(
     )
 
     row = get_case(conn, case_id)
+    # Policy performs no I/O, so the caller supplies the state it needs to decide
+    # DUPLICATE_ACTION. Only actions that actually executed count — a scheduled
+    # row that never ran is not a duplicate.
+    executed_keys = frozenset(
+        r["idempotency_key"]
+        for r in conn.execute(
+            "SELECT idempotency_key FROM actions WHERE case_id = ? AND executed_at IS NOT NULL",
+            (case_id,),
+        )
+    )
     view = CaseView(
         case_id=case_id,
         cohort=Cohort(row["cohort"]),
@@ -156,6 +175,7 @@ def process_case(
         amount_paise=pf.amount_paise,
         is_recurring=pf.is_recurring,
         state=CaseState(row["state"]),
+        executed_action_keys=executed_keys,
     )
     verdict = evaluate(proposal, view, rules, now, dctx)
     append(
@@ -168,7 +188,13 @@ def process_case(
     )
 
     if not verdict.is_executable:
-        if view.cohort is Cohort.HOLDOUT and "HOLDOUT_GUARD" in verdict.fired_rules:
+        if verdict.decision is Decision.REVIEW:
+            # A REVIEW is not an abandonment — a human still has to decide. This is
+            # what QUARANTINED is for; before CONFIDENCE_FLOOR existed nothing ever
+            # entered that state and it was unreachable (docs/00_project_state.md).
+            transition(conn, case_id, "QUARANTINED")
+            final = "QUARANTINED"
+        elif view.cohort is Cohort.HOLDOUT and "HOLDOUT_GUARD" in verdict.fired_rules:
             transition(conn, case_id, "HOLDOUT_CLOSED")
             final = "HOLDOUT_CLOSED"
         else:
