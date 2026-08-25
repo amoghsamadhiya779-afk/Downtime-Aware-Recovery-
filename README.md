@@ -86,7 +86,7 @@ The AI model is strictly isolated as a diagnostic component:
 - **Output**: Structured JSON specifying `recoverability`, `confidence`, `proposed_action`, `proposed_delay_minutes`, and `expected_outcome`.
 - **Privileges**: Zero database privileges, zero API access, zero tool execution capability.
 - **Multi-Tier Fallbacks**:
-  - *Tier 0*: Primary model provider (e.g. Claude 3.5 Sonnet / Groq Llama 3.3).
+  - *Tier 0*: Primary model provider (e.g. claude-sonnet-5 / openai/gpt-oss-120b).
   - *Tier 1*: Alternate model provider fallback.
   - *Tier 2*: Taxonomy prior based on historical payment failure statistics.
   - *Tier 3*: Fallback to `UNKNOWN` recoverability. The policy gate halts execution (`STOP`), preventing any speculative charge.
@@ -210,7 +210,7 @@ python scripts/demo.py
 ```powershell
 python scripts/serve_dashboard.py --port 8000
 ```
-Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, Highcharts analytics grid, and the 9-phase transaction ledger.
+Open **`http://localhost:8000`** in your browser to inspect the 7 core KPIs, hand-rolled CSS analytics grid, and the 9-phase transaction ledger.
 
 ---
 

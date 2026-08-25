@@ -222,7 +222,7 @@ def run_smoke_tests() -> dict[str, tuple[str, str]]:
             trace_data = json.loads(res.read().decode("utf-8"))
             assert trace_data.get("chain_valid") is True
 
-        results["Dashboard & Endpoints"] = ("PASS", f"HTML/CSS/JS, 7 KPIs, Highcharts aggregates, and 9-phase trace API responding 200 OK.")
+        results["Dashboard & Endpoints"] = ("PASS", f"HTML/CSS/JS, 7 KPIs, hand-rolled CSS aggregates, and 9-phase trace API responding 200 OK.")
     except Exception as e:
         results["Dashboard & Endpoints"] = ("FAIL", f"Dashboard API failure: {e}\n{traceback.format_exc()}")
 

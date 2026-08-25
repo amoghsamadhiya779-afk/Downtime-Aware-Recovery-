@@ -16,11 +16,11 @@ file answers only "where are we now and what's next."
 | **Deadline** | 5 Sep 2026 · **11 days left** |
 | **Track** | 03 — AI Revenue Recovery |
 | **Phase** | 1 complete and hardened. Phase 2 not started. |
-| **Tests** | **224 passing**, 13 files |
-| **ADRs** | 20 |
+| **Tests** | **321 passing**, 16 files |
+| **ADRs** | 21 |
 | **Branch** | `policy-engine-v2-and-baseline` (1 commit pushed; PR not opened — `gh` not installed) |
-| **Uncommitted** | Yes — ADR-018/019/020 work (contracts, executor, state machine) |
-| **Biggest blocker** | AMBIGUOUS labels are random → the AI-vs-baseline question is currently unanswerable |
+| **Uncommitted** | Yes — ADR-018/019/020/021 work (contracts, executor, state machine, feature-conditioned labels) |
+| **Biggest blocker** | Zero real Razorpay API calls (test-mode keys sit unused in .env) |
 
 ---
 
@@ -40,7 +40,7 @@ Against the 11-day plan in the approved plan file:
 | 7 | Eval harness, confusion matrix, sensitivity sweep | ⚠️ Harness done; **sweep + ablation arms not built** |
 | 8 | Minimal web UI | ❌ Not started |
 | 9 | Failure gallery, kill switch, shadow mode | ⚠️ Kill switch done; shadow mode cut (ADR-008); gallery not built |
-| 10 | Architecture doc + README with honest limits | ⚠️ `ARCHITECTURE.md` + `docs/00,01,03,06` exist; **no README** |
+| 10 | Architecture doc + README with honest limits | ✅ `ARCHITECTURE.md` + `docs/00,01,03,06` exist; **README completed** |
 | 11 | 5-min pitch video, submit | ❌ Not started |
 
 **Roughly:** the decision core is done and unusually well-tested. The *submission
@@ -73,25 +73,15 @@ macro-F1, safety invariants, and a mandatory adverse-findings section.
 
 ## Blockers, in priority order
 
-**1. AMBIGUOUS labels are random — the core claim is unmeasurable.**
-`datagen/generate.py::_pick_true_class()` draws ambiguous labels with *zero*
-dependence on any input feature, so chance is the ceiling by construction. The
-observed macro-F1 scores (baseline 0.151, AI 0.260) match the arithmetic for
-majority-guessing vs proportional-guessing against random labels almost exactly.
-Until this is fixed, "does AI add value?" **cannot be answered** with this corpus.
-Fix it *before* re-running any arm comparison — and do not tune it until the AI
-wins, which is exactly what `eval/PREREGISTRATION.md` exists to prevent.
-
-**2. Zero real Razorpay API calls.** Test-mode keys sit unused in `.env`. This is
+**1. Zero real Razorpay API calls.** Test-mode keys sit unused in `.env`. This is
 the field's most-cited gap (`research/COMPETITORS.md` E17: no sampled competitor
 touches real APIs) and the load-bearing answer to a panel asking "is this real or
 simulated?"
 
-**3. No README.** Invariant 9 says the README quotes generated `eval/report.md`.
-There is no README at all. It is the first thing a reviewer opens.
-
-**4. `ClaudeDiagnosis` never run against the real API** — only mocked.
+**2. `ClaudeDiagnosis` never run against the real API** — only mocked.
 `GroqDiagnosis` has run live, on hand-built cases and one corpus pass.
+
+*(Note: AMBIGUOUS label generation blocker resolved in ADR-021 with feature-conditioned posterior).*
 
 ---
 
