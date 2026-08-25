@@ -116,12 +116,12 @@ def conditioned_ambiguous_probs(
 
     # 1. Downtime active: strong shift towards TRANSIENT_INFRA
     if downtime_active:
-        weights[Recoverability.TRANSIENT_INFRA] *= 30.0
-        weights[Recoverability.CUSTOMER_FIXABLE] *= 0.05
-        weights[Recoverability.INSTRUMENT_INVALID] *= 0.05
-        weights[Recoverability.TERMINAL] *= 0.05
+        weights[Recoverability.TRANSIENT_INFRA] *= 25.0
+        weights[Recoverability.CUSTOMER_FIXABLE] *= 0.10
+        weights[Recoverability.INSTRUMENT_INVALID] *= 0.10
+        weights[Recoverability.TERMINAL] *= 0.10
     else:
-        weights[Recoverability.TRANSIENT_INFRA] *= 0.02
+        weights[Recoverability.TRANSIENT_INFRA] *= 0.35
 
     # 2. Recurring mandates: shift towards TERMINAL / INSTRUMENT_INVALID (no interactive human)
     if is_recurring:

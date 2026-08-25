@@ -1,0 +1,21 @@
+{
+  "n": 500,
+  "method_mix": {
+    "upi": 0.608,
+    "card": 0.166,
+    "emandate": 0.174,
+    "netbanking": 0.052
+  },
+  "customers_total": 78,
+  "customers_with_repeat_failures": 67,
+  "max_failures_single_customer": 52,
+  "mandates_total": 46,
+  "mandates_with_multi_attempt_sequence": 42,
+  "ambiguity_mix": {
+    "CLEAN": 273,
+    "AMBIGUOUS": 227
+  },
+  "unseen_reason_count": 21,
+  "downtime_correlated_failures": 1,
+  "downtime_windows": 6
+}

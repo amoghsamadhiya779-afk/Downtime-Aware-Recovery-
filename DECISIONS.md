@@ -810,3 +810,43 @@ Tested via `tests/test_datagen_labels.py` asserting properties of the data-gener
 - A reason-only predictor (marginalizing out features) scores macro-F1 < 0.40.
 - A full-information oracle (knowing all generating features) scores macro-F1 > 0.75.
 
+
+---
+
+## ADR-022: Live Razorpay Test API Integration and Grounded Golden Dataset
+
+### Context
+
+The evaluation control plane executed primarily against simulated responses. Test-mode credentials (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`) were configured in `.env` but had no active live executor implementation, raising questions regarding real-world API compatibility and payload fidelity.
+
+### Decision
+
+1. **`LiveRazorpayExecutor` (`agent/executors/live.py`)**:
+   - Implements `ExecutorPort` with authenticated HTTP basic auth against `https://api.razorpay.com/v1/`.
+   - Dispatches `Action.RETRY` as real Razorpay Payment Links (`/v1/payment_links`) and Orders (`/v1/orders`).
+   - Implements strict idempotency key forwarding in `reference_id` and payload notes.
+   - Detects Razorpay HTTP 400 duplicate reference responses and translates them into `ActionResult(replayed=True, outcome=SUCCEEDED)`.
+   - Maps timeouts into `ExecutionUncertain(EXECUTION_TIMEOUT)` to initiate safe quarantine rather than blind retries.
+2. **Grounded Golden Dataset (`data/golden/`)**:
+   - Created `scripts/capture_golden.py` to capture live test-mode responses from `/v1/orders`, `/v1/payment_links`, and `/v1/payments`.
+   - Anchors the synthetic generator schemas directly to verified Razorpay JSON payloads.
+
+---
+
+## ADR-023: Paced Multi-Arm Live LLM Evaluation and Tracked Artifact Provenance
+
+### Context
+
+Sequential evaluation loops over high-volume corpora triggered free-tier rate limits (30 RPM) on live LLM providers, while evaluation reports were untracked in git.
+
+### Decision
+
+1. **Rate-Paced Inference (`GroqDiagnosis`)**:
+   - Configured high-throughput `openai/gpt-oss-20b` with adaptive request pacing and fallback ladders.
+   - Preserves fail-closed fallback discipline (Tier 0 -> Tier 1 repair -> Tier 2 prior -> Tier 3 `UNKNOWN`).
+2. **Tracked Artifact Provenance**:
+   - Removed `eval/report*.md` from `.gitignore` so all generated evaluation evidence is tracked in Git.
+   - Implemented `scripts/build_comparison.py` to automatically compile `eval/comparison.md` from raw report files.
+   - Extended `scripts/docs_check.py` to strictly enforce that all numeric claims across README.md match raw evaluation outputs.
+
+

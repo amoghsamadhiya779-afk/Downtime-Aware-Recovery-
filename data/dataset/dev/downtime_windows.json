@@ -1,0 +1,98 @@
+[
+  {
+    "id": "down_000",
+    "method": "card",
+    "instrument": {
+      "bank": null,
+      "network": "visa",
+      "type": "credit",
+      "vpa_handle": null
+    },
+    "begin": "2026-07-12T17:00:00Z",
+    "end": "2026-07-12T19:00:00Z",
+    "status": "started",
+    "scheduled": false,
+    "severity": "medium",
+    "flow": null
+  },
+  {
+    "id": "down_001",
+    "method": "netbanking",
+    "instrument": {
+      "bank": "HDFC",
+      "network": null,
+      "type": null,
+      "vpa_handle": null
+    },
+    "begin": "2026-07-26T04:00:00Z",
+    "end": "2026-07-26T05:00:00Z",
+    "status": "started",
+    "scheduled": true,
+    "severity": "low",
+    "flow": null
+  },
+  {
+    "id": "down_002",
+    "method": "card",
+    "instrument": {
+      "bank": null,
+      "network": "visa",
+      "type": "debit",
+      "vpa_handle": null
+    },
+    "begin": "2026-07-28T17:00:00Z",
+    "end": "2026-07-28T21:00:00Z",
+    "status": "started",
+    "scheduled": true,
+    "severity": "medium",
+    "flow": null
+  },
+  {
+    "id": "down_003",
+    "method": "netbanking",
+    "instrument": {
+      "bank": "HDFC",
+      "network": null,
+      "type": null,
+      "vpa_handle": null
+    },
+    "begin": "2026-07-07T19:00:00Z",
+    "end": "2026-07-07T22:00:00Z",
+    "status": "started",
+    "scheduled": false,
+    "severity": "low",
+    "flow": null
+  },
+  {
+    "id": "down_004",
+    "method": "card",
+    "instrument": {
+      "bank": null,
+      "network": "visa",
+      "type": "credit",
+      "vpa_handle": null
+    },
+    "begin": "2026-07-04T22:00:00Z",
+    "end": "2026-07-05T01:00:00Z",
+    "status": "started",
+    "scheduled": false,
+    "severity": "medium",
+    "flow": null
+  },
+  {
+    "id": "down_005",
+    "method": "netbanking",
+    "instrument": {
+      "bank": "UTIB",
+      "network": null,
+      "type": null,
+      "vpa_handle": null
+    },
+    "begin": "2026-07-23T21:00:00Z",
+    "end": "2026-07-24T01:00:00Z",
+    "status": "started",
+    "scheduled": true,
+    "severity": "low",
+    "flow": null
+  }
+]

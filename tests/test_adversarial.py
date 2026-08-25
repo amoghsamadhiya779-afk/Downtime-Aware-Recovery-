@@ -101,4 +101,15 @@ def test_adversarial_model_cannot_breach_caps_or_contaminate_holdout():
     total_attempts = sum(row["attempts"] for row in conn.execute("SELECT attempts FROM cases"))
     assert total_attempts <= n * max_cap
 
+    # The adversarial financial damage bound: total spend in paise across the batch
+    # is strictly bounded by sum(cap_by_method * action_cost_paise), proving worst-case rupee loss containment.
+    action_cost_paise = rules.params("EV_FLOOR").get("action_cost_paise", 500)
+    max_worst_case_loss_paise = sum(
+        params["by_method"].get(row["method"], params["default_cap"]) * action_cost_paise
+        for row in conn.execute("SELECT method FROM cases WHERE cohort = 'TREATED'")
+    )
+    total_wasted_spend_paise = total_attempts * action_cost_paise
+    assert total_wasted_spend_paise <= max_worst_case_loss_paise
+    assert total_wasted_spend_paise <= n * max_cap * action_cost_paise
+
     assert verify_chain(conn)

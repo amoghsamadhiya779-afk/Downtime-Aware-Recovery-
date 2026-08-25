@@ -7,7 +7,11 @@ __pycache__/
 # Secrets — never commit. Pre-commit hook also greps for rzp_ prefixes.
 .env
 
-# Generated artefacts
-data/
+# Ephemeral SQLite database files
 *.db
-eval/report*.md
+
+# Data directory — ignore runtime databases but track golden payloads
+data/*.db
+data/*_scoring_log.jsonl
+!data/golden/
+!data/golden/**
