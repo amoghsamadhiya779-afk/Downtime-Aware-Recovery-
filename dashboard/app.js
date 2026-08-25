@@ -23,28 +23,40 @@ const state = {
 
 const DEMOS = [
   {
-    key: "duplicate_event",
-    title: "Duplicate event",
-    desc: "Re-deliver the same authorization twice. Must return the original result, not spend again.",
-    icon: '<path d="M8 8h10v10H8zM6 6h10v2M6 6v10h2"/>',
-  },
-  {
-    key: "invalid_ai_output",
-    title: "Invalid AI output",
-    desc: "Malformed model response. Must fail closed to a queued case, never a guessed action.",
-    icon: '<path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
+    key: "successful_recovery",
+    title: "Successful Recovery",
+    desc: "Transient UPI failure diagnosed, approved by policy (ALLOW), and successfully recovered (₹2,499.00).",
+    icon: '<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/><path d="m9 12 2 2 4-4"/>',
   },
   {
     key: "policy_rejection",
-    title: "Policy veto",
-    desc: "A confident model asks to retry past the attempt cap. Policy must deny regardless of confidence.",
+    title: "Policy Veto (Adversarial AI)",
+    desc: "A 100% confident AI retry on an exhausted attempt budget is vetoed by the Zero-LLM Policy Gate (Rule: ATTEMPT_CAP).",
     icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9.5 12.5 11 14l3.5-3.5"/>',
   },
   {
     key: "execution_timeout",
-    title: "Gateway timeout",
-    desc: "The executor cannot confirm outcome. Must quarantine for reconciliation, never assume success.",
+    title: "Gateway Timeout & Quarantine",
+    desc: "Netbanking gateway timeout intercepted safely into QUARANTINED state for reconciliation.",
     icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  },
+  {
+    key: "live_proof",
+    title: "Live Razorpay API Proof",
+    desc: "Dispatches a real test-mode Payment Link against Razorpay API with idempotency key forwarding.",
+    icon: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  },
+  {
+    key: "duplicate_event",
+    title: "Idempotent Replay Guard",
+    desc: "Re-deliver the same authorization twice. Returns original record with replayed=true, avoiding double-charging.",
+    icon: '<path d="M8 8h10v10H8zM6 6h10v2M6 6v10h2"/>',
+  },
+  {
+    key: "invalid_ai_output",
+    title: "Malformed AI Fallback",
+    desc: "Corrupted LLM response safely caught by Tier-3 fail-closed fallback to UNKNOWN (ABANDONED).",
+    icon: '<path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
   },
 ];
 

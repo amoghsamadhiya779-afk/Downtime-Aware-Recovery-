@@ -111,6 +111,11 @@ def test_run_demo_scenario_dispatcher(setup):
     res = run_demo_scenario(conn, "duplicate_event", clock=clock, rules=rules, downtime=downtime)
     assert res["scenario"] == "duplicate_event"
 
+    # Live proof dispatch
+    res_live = run_demo_scenario(conn, "live_proof", clock=clock, rules=rules, downtime=downtime)
+    assert res_live["scenario"] == "live_proof"
+    assert res_live["case_id"].startswith("demo_live_")
+
     # Invalid scenario name raises ValueError
     with pytest.raises(ValueError):
         run_demo_scenario(conn, "invalid_nonexistent_scenario", clock=clock, rules=rules, downtime=downtime)
