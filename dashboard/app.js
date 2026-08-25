@@ -1,657 +1,529 @@
-/**
- * Payment Recovery Control Plane — Executive Dashboard Client
- * Handles real-time metric polling, interactive filtering, and audit trace visualization.
- */
+"use strict";
 
-document.addEventListener("DOMContentLoaded", () => {
-  // DOM Elements
-  const elRevenueAtRisk = document.getElementById("val-revenue-at-risk");
-  const elRecoveredValue = document.getElementById("val-recovered-value");
-  const elRecoveryRate = document.getElementById("val-recovery-rate");
-  const elActionsExecuted = document.getElementById("val-actions-executed");
-  const elActionsBlocked = document.getElementById("val-actions-blocked");
-  const elAiConfidence = document.getElementById("val-ai-confidence");
-  const elFailureRate = document.getElementById("val-failure-rate");
+/* ============================================================================
+   Recovery Control Plane — dashboard client
+   Talks to the endpoints in scripts/serve_dashboard.py exactly as they exist:
+     GET  /api/health
+     GET  /api/metrics
+     GET  /api/transactions?limit&offset&search&cohort_filter&method_filter&state_filter
+     GET  /api/transaction/<case_id>   -> 9-phase detail (agent/dashboard.py)
+     GET  /api/trace/<case_id>
+     POST /api/demo/trigger  { scenario }
+   No framework, no build step — this file is served as-is by the stdlib server.
+   ========================================================================= */
 
-  const elTransactionCount = document.getElementById("transaction-count");
-  const elTableBody = document.getElementById("table-body");
-  const elInputSearch = document.getElementById("input-search");
-  const elFilterCohort = document.getElementById("filter-cohort");
-  const elFilterMethod = document.getElementById("filter-method");
-  const elFilterState = document.getElementById("filter-state");
-  const elBtnRefresh = document.getElementById("btn-refresh");
+const state = {
+  limit: 25,
+  offset: 0,
+  total: 0,
+  search: "",
+  filters: { state: "ALL", method: "ALL", cohort: "ALL" },
+  rows: [],
+};
 
-  const elTraceDrawer = document.getElementById("trace-drawer");
-  const elDrawerOverlay = document.getElementById("drawer-overlay");
-  const elBtnCloseDrawer = document.getElementById("btn-close-drawer");
-  const elDrawerCaseId = document.getElementById("drawer-case-id");
-  const elDrawerMetaBar = document.getElementById("drawer-meta-bar");
-  const elTimelineContainer = document.getElementById("timeline-container");
+const DEMOS = [
+  {
+    key: "duplicate_event",
+    title: "Duplicate event",
+    desc: "Re-deliver the same authorization twice. Must return the original result, not spend again.",
+    icon: '<path d="M8 8h10v10H8zM6 6h10v2M6 6v10h2"/>',
+  },
+  {
+    key: "invalid_ai_output",
+    title: "Invalid AI output",
+    desc: "Malformed model response. Must fail closed to a queued case, never a guessed action.",
+    icon: '<path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
+  },
+  {
+    key: "policy_rejection",
+    title: "Policy veto",
+    desc: "A confident model asks to retry past the attempt cap. Policy must deny regardless of confidence.",
+    icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9.5 12.5 11 14l3.5-3.5"/>',
+  },
+  {
+    key: "execution_timeout",
+    title: "Gateway timeout",
+    desc: "The executor cannot confirm outcome. Must quarantine for reconciliation, never assume success.",
+    icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  },
+];
 
-  // Format INR currency
-  function formatINR(amount) {
-    if (amount === undefined || amount === null) return "₹0.00";
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      minimumFractionDigits: 2,
-    }).format(amount);
+const STATE_BADGE = {
+  RECOVERED: "ok",
+  FAILED_ATTEMPT: "bad",
+  ABANDONED: "mute",
+  QUARANTINED: "warn",
+  HOLDOUT_CLOSED: "info",
+  SCHEDULED: "info",
+  EXECUTING: "info",
+  DIAGNOSED: "mute",
+  DETECTED: "mute",
+};
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+function fmtINR(rupees) {
+  if (rupees === null || rupees === undefined) return "—";
+  const n = Number(rupees);
+  if (Math.abs(n) >= 10000000) return "₹" + (n / 10000000).toFixed(2) + " Cr";
+  if (Math.abs(n) >= 100000) return "₹" + (n / 100000).toFixed(2) + " L";
+  return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+function fmtINRFull(rupees) {
+  if (rupees === null || rupees === undefined) return "—";
+  return "₹" + Number(rupees).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(v, digits = 1) {
+  if (v === null || v === undefined) return "—";
+  return Number(v).toFixed(digits) + "%";
+}
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  } catch { return iso; }
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function titleCase(s) {
+  return String(s ?? "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function fetchJSON(url, opts) {
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  return data;
+}
+
+// ---------------------------------------------------------------- toasts ---
+
+function toast(title, message, kind = "ok") {
+  const stack = $("#toasts");
+  const el = document.createElement("div");
+  el.className = `toast is-${kind}`;
+  el.innerHTML = `<div><div class="tt">${esc(title)}</div><div class="tm">${esc(message)}</div></div>`;
+  stack.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .2s ease";
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 220);
+  }, 4200);
+}
+
+// -------------------------------------------------------------- health -----
+
+async function loadHealth() {
+  const dot = $("#health-dot"), text = $("#health-text");
+  const chainChip = $("#chip-chain"), chainText = $("#chain-text");
+  try {
+    const h = await fetchJSON("/api/health");
+    const ok = h.status === "healthy";
+    dot.classList.toggle("is-bad", !ok);
+    $("#chip-health").classList.toggle("is-ok", ok);
+    $("#chip-health").classList.toggle("is-bad", !ok);
+    text.textContent = ok ? "Healthy" : "Degraded";
+    const chainOk = !!h.audit_chain_valid;
+    chainChip.classList.toggle("is-ok", chainOk);
+    chainChip.classList.toggle("is-bad", !chainOk);
+    chainText.textContent = chainOk ? "Chain verified" : "Chain broken";
+  } catch (e) {
+    dot.classList.add("is-bad");
+    $("#chip-health").classList.add("is-bad");
+    text.textContent = "Unreachable";
   }
+}
 
-  // Format percentage
-  function formatPercent(pct) {
-    if (pct === undefined || pct === null) return "0.0%";
-    return `${Number(pct).toFixed(1)}%`;
-  }
+// -------------------------------------------------------------- metrics ----
 
-  // Fetch & Render Metrics
-  async function fetchMetrics() {
-    try {
-      const res = await fetch("/api/metrics");
-      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      const data = await res.json();
+function kpiCard({ accent, icon, label, value, unit, foot }) {
+  return `
+    <div class="kpi" data-accent="${accent}">
+      <div class="kpi-label">${icon}<span>${esc(label)}</span></div>
+      <div class="kpi-value">${value}${unit ? `<span class="unit">${esc(unit)}</span>` : ""}</div>
+      ${foot ? `<div class="kpi-foot">${foot}</div>` : ""}
+    </div>`;
+}
 
-      elRevenueAtRisk.textContent = formatINR(data.revenue_at_risk_rupees);
-      elRecoveredValue.textContent = formatINR(data.recovered_value_rupees);
-      elRecoveryRate.textContent = formatPercent(data.recovery_rate_pct);
-      elActionsExecuted.textContent = (data.actions_executed || 0).toLocaleString();
-      elActionsBlocked.textContent = (data.actions_blocked || 0).toLocaleString();
-      elAiConfidence.textContent = formatPercent(data.ai_confidence_pct);
-      elFailureRate.textContent = formatPercent(data.failure_rate_pct);
-    } catch (err) {
-      console.error("Failed to load metrics:", err);
-    }
-  }
+const ICONS = {
+  risk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 20h20L12 2Z"/><path d="M12 9v5m0 3h.01"/></svg>',
+  recovered: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>',
+  rate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>',
+  brain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2a3 3 0 0 0-3 3v.3A3 3 0 0 0 4 8v1a3 3 0 0 0-1 5.6V16a3 3 0 0 0 3 3h1"/><path d="M15 2a3 3 0 0 1 3 3v.3A3 3 0 0 1 20 8v1a3 3 0 0 1 1 5.6V16a3 3 0 0 1-3 3h-1"/><path d="M9 2h6v18a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V2Z"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>',
+};
 
-  // Fetch & Render Transactions
-  async function fetchTransactions() {
-    const search = elInputSearch.value.trim();
-    const cohort = elFilterCohort.value;
-    const method = elFilterMethod.value;
-    const state = elFilterState.value;
+function renderMetrics(m) {
+  const grid = $("#kpi-grid");
+  grid.innerHTML = [
+    kpiCard({
+      accent: "blue", icon: ICONS.risk, label: "Revenue at risk",
+      value: fmtINR(m.revenue_at_risk_rupees),
+      foot: `${m.total_cases ?? 0} cases &middot; full: ${fmtINRFull(m.revenue_at_risk_rupees)}`,
+    }),
+    kpiCard({
+      accent: "green", icon: ICONS.recovered, label: "Recovered value",
+      value: fmtINR(m.recovered_value_rupees),
+      foot: `${m.recovered_cases ?? 0} cases recovered`,
+    }),
+    kpiCard({
+      accent: "green", icon: ICONS.rate, label: "Recovery rate",
+      value: fmtPct(m.recovery_rate_pct),
+      foot: "value-weighted, not case-weighted",
+    }),
+    kpiCard({
+      accent: "blue", icon: ICONS.bolt, label: "Actions executed",
+      value: (m.actions_executed ?? 0).toLocaleString("en-IN"),
+      foot: "dispatched and ran",
+    }),
+    kpiCard({
+      accent: "amber", icon: ICONS.shield, label: "Actions blocked",
+      value: (m.actions_blocked ?? 0).toLocaleString("en-IN"),
+      foot: "denied, reviewed, or stopped by policy",
+    }),
+    kpiCard({
+      accent: "blue", icon: ICONS.brain, label: "AI confidence",
+      value: fmtPct(m.ai_confidence_pct),
+      foot: "mean over diagnosed cases",
+    }),
+    kpiCard({
+      accent: "red", icon: ICONS.x, label: "Failure rate",
+      value: fmtPct(m.failure_rate_pct),
+      foot: "not recovered, any reason",
+    }),
+  ].join("");
 
-    const params = new URLSearchParams({
-      limit: "100",
-      search: search || "",
-      cohort_filter: cohort,
-      method_filter: method,
-      state_filter: state,
+  renderBars("#methods", Object.entries(m.methods || {}).sort((a, b) => b[1].total - a[1].total), (name, v) => ({
+    name: name.toUpperCase(),
+    val: `${v.recovered}/${v.total} · ${fmtPct(v.recovery_rate_pct, 0)}`,
+    pct: v.recovery_rate_pct,
+    cls: v.recovery_rate_pct >= 50 ? "is-ok" : v.recovery_rate_pct >= 20 ? "" : "is-warn",
+  }));
+
+  const maxErr = Math.max(1, ...(m.errors || []).map((e) => e.total));
+  renderBars("#errors", (m.errors || []).map((e) => [e.reason, e]), (name, e) => ({
+    name: titleCase(name),
+    val: `${e.total}`,
+    pct: (e.total / maxErr) * 100,
+    cls: "",
+  }));
+
+  const states = $("#states");
+  const order = ["RECOVERED", "SCHEDULED", "EXECUTING", "DIAGNOSED", "DETECTED", "FAILED_ATTEMPT", "QUARANTINED", "ABANDONED", "HOLDOUT_CLOSED"];
+  const entries = Object.entries(m.states || {}).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+  states.innerHTML = entries.length
+    ? entries.map(([s, n]) => `
+        <div class="state-row">
+          <span class="badge badge-${STATE_BADGE[s] || "mute"}">${titleCase(s)}</span>
+          <span class="n">${n}</span>
+        </div>`).join("")
+    : `<div class="empty">No cases yet</div>`;
+
+  $("#foot-meta").textContent = `${m.total_cases ?? 0} cases · ${Object.keys(m.cohorts || {}).length} arms · updated ${new Date().toLocaleTimeString("en-IN")}`;
+}
+
+function renderBars(sel, entries, mapFn) {
+  const el = $(sel);
+  if (!entries.length) { el.innerHTML = `<div class="empty">No data</div>`; return; }
+  el.innerHTML = entries.map(([key, v]) => {
+    const { name, val, pct, cls } = mapFn(key, v);
+    return `
+      <div class="bar-row">
+        <span class="bar-name">${esc(name)}</span>
+        <span class="bar-val">${esc(val)}</span>
+        <div class="bar-track"><div class="bar-fill ${cls}" style="width:${Math.min(100, Math.max(2, pct || 0))}%"></div></div>
+      </div>`;
+  }).join("");
+}
+
+// -------------------------------------------------------------- demos ------
+
+function renderDemoCards() {
+  $("#demos").innerHTML = DEMOS.map((d) => `
+    <button class="demo-card" data-scenario="${d.key}">
+      <div class="t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${d.icon}</svg>${esc(d.title)}</div>
+      <div class="d">${esc(d.desc)}</div>
+    </button>`).join("");
+
+  $$(".demo-card").forEach((btn) => btn.addEventListener("click", () => runDemo(btn)));
+}
+
+async function runDemo(btn) {
+  const scenario = btn.dataset.scenario;
+  const label = btn.querySelector(".t").textContent;
+  btn.disabled = true;
+  try {
+    const result = await fetchJSON("/api/demo/trigger", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario }),
     });
-
-    try {
-      const res = await fetch(`/api/transactions?${params.toString()}`);
-      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      const data = await res.json();
-
-      elTransactionCount.textContent = `${data.total} transactions`;
-      renderTable(data.transactions || []);
-    } catch (err) {
-      console.error("Failed to load transactions:", err);
-      elTableBody.innerHTML = `
-        <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 2rem;">
-            Failed to load transactions. Check server connection.
-          </td>
-        </tr>
-      `;
-    }
+    toast(result.title || label, result.message || "Scenario executed and recorded.", "ok");
+    await Promise.all([loadMetrics(), loadTransactions()]);
+    if (result.case_id) openDrawer(result.case_id);
+  } catch (e) {
+    toast(`${label} failed`, e.message, "bad");
+  } finally {
+    btn.disabled = false;
   }
+}
 
-  // Render Table Rows
-  function renderTable(transactions) {
-    if (transactions.length === 0) {
-      elTableBody.innerHTML = `
-        <tr>
-          <td colspan="9" class="text-center text-muted" style="padding: 2.5rem;">
-            No transactions match the selected filters.
-          </td>
-        </tr>
-      `;
-      return;
-    }
+// -------------------------------------------------------------- table ------
 
-    elTableBody.innerHTML = transactions
-      .map((tx) => {
-        const stateClass = getStateBadgeClass(tx.state);
-        const cohortClass = tx.cohort === "TREATED" ? "badge-treated" : "badge-holdout";
+function rowHTML(t) {
+  const conf = t.ai_confidence;
+  const confLow = conf !== null && conf !== undefined && conf < 50;
+  return `
+    <tr data-case="${esc(t.case_id)}">
+      <td class="id">${esc(t.case_id)}<span class="sub">${esc(t.order_id)}</span></td>
+      <td class="amount">${fmtINRFull(t.amount_rupees)}</td>
+      <td>${t.method ? t.method.toUpperCase() : "—"}<span class="sub">${esc(t.instrument_type || "")}</span></td>
+      <td>${titleCase(t.error_reason)}</td>
+      <td>${t.ai_recoverability && t.ai_recoverability !== "N/A" ? `<span class="badge badge-info">${titleCase(t.ai_recoverability)}</span>` : `<span class="badge badge-mute">Rules only</span>`}</td>
+      <td>${conf !== null && conf !== undefined
+        ? `<div class="conf-cell"><div class="conf-track"><div class="conf-fill ${confLow ? "is-low" : ""}" style="width:${conf}%"></div></div><span class="conf-num">${conf.toFixed(0)}%</span></div>`
+        : `<span class="sub">—</span>`}</td>
+      <td>${policyBadge(t.policy_decision)}</td>
+      <td><span class="badge ${t.cohort === "HOLDOUT" ? "badge-mute" : "badge-info"}">${t.cohort === "HOLDOUT" ? "Holdout" : "Treated"}</span></td>
+      <td><span class="badge badge-${STATE_BADGE[t.state] || "mute"}">${titleCase(t.state)}</span></td>
+    </tr>`;
+}
 
-        return `
-          <tr>
-            <td>
-              <div class="case-id-group">
-                <span class="case-id-text">${escapeHTML(tx.case_id)}</span>
-                <span class="order-id-text">${escapeHTML(tx.order_id)}</span>
-              </div>
-            </td>
-            <td>
-              <span class="mono-cell" style="text-transform: uppercase;">${escapeHTML(tx.method)}</span>
-            </td>
-            <td>
-              <span class="amount-text">${formatINR(tx.amount_rupees)}</span>
-            </td>
-            <td>
-              <span class="badge ${cohortClass}">${escapeHTML(tx.cohort)}</span>
-            </td>
-            <td>
-              <span class="mono-cell text-muted" style="font-size: 0.8rem;">${escapeHTML(tx.error_reason)}</span>
-            </td>
-            <td>
-              <div>
-                <strong style="font-size: 0.8rem;">${escapeHTML(tx.ai_recoverability)}</strong>
-                ${tx.ai_confidence !== null ? `<span class="text-muted" style="font-size: 0.75rem;"> (${tx.ai_confidence}%)</span>` : ""}
-              </div>
-            </td>
-            <td>
-              <div>
-                <span style="font-weight: 600; font-size: 0.8rem; color: ${tx.policy_decision === "ALLOW" ? "var(--accent-emerald)" : tx.policy_decision === "REVIEW" ? "var(--accent-amber)" : "var(--accent-rose)"};">
-                  ${escapeHTML(tx.policy_decision)}
-                </span>
-                ${tx.policy_action ? `<span class="text-muted" style="font-size: 0.75rem;"> (${escapeHTML(tx.policy_action)})</span>` : ""}
-              </div>
-            </td>
-            <td>
-              <span class="badge ${stateClass}">${escapeHTML(tx.state)}</span>
-            </td>
-            <td>
-              <button class="btn-trace" data-case-id="${escapeHTML(tx.case_id)}">
-                View Trace
-              </button>
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
+function policyBadge(decision) {
+  if (decision === "ALLOW") return `<span class="badge badge-ok">Allow</span>`;
+  if (decision === "DENY") return `<span class="badge badge-bad">Deny</span>`;
+  if (decision === "REVIEW") return `<span class="badge badge-warn">Review</span>`;
+  return `<span class="badge badge-mute">—</span>`;
+}
 
-    // Attach click listeners for Trace button
-    elTableBody.querySelectorAll(".btn-trace").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const caseId = btn.getAttribute("data-case-id");
-        openTraceDrawer(caseId);
-      });
-    });
+function renderRowsSkeleton() {
+  $("#rows").innerHTML = Array.from({ length: 8 }).map(() => `
+    <tr><td colspan="9"><div class="skel" style="height:16px;width:${60 + Math.random() * 30}%"></div></td></tr>
+  `).join("");
+}
+
+function renderRows() {
+  const tbody = $("#rows");
+  if (!state.rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <div>No transactions match these filters</div>
+    </div></td></tr>`;
+    return;
   }
+  tbody.innerHTML = state.rows.map(rowHTML).join("");
+  $$("#rows tr[data-case]").forEach((tr) => tr.addEventListener("click", () => openDrawer(tr.dataset.case)));
+}
 
-  function getStateBadgeClass(state) {
-    switch (state) {
-      case "RECOVERED":
-        return "badge-recovered";
-      case "QUARANTINED":
-        return "badge-quarantined";
-      case "ABANDONED":
-        return "badge-abandoned";
-      case "HOLDOUT_CLOSED":
-        return "badge-holdout-closed";
-      case "SCHEDULED":
-        return "badge-scheduled";
-      case "EXECUTING":
-        return "badge-executing";
-      default:
-        return "badge-scheduled";
-    }
+async function loadTransactions() {
+  renderRowsSkeleton();
+  const params = new URLSearchParams({
+    limit: state.limit, offset: state.offset,
+    state_filter: state.filters.state, method_filter: state.filters.method, cohort_filter: state.filters.cohort,
+  });
+  if (state.search) params.set("search", state.search);
+  try {
+    const data = await fetchJSON(`/api/transactions?${params}`);
+    state.rows = data.transactions || [];
+    state.total = data.total || 0;
+    renderRows();
+    const from = state.total ? state.offset + 1 : 0;
+    const to = Math.min(state.offset + state.limit, state.total);
+    $("#page-info").textContent = `${from}–${to} of ${state.total}`;
+    $("#btn-prev").disabled = state.offset === 0;
+    $("#btn-next").disabled = to >= state.total;
+  } catch (e) {
+    $("#rows").innerHTML = `<tr><td colspan="9"><div class="empty">Could not load transactions — ${esc(e.message)}</div></td></tr>`;
   }
+}
 
-  // Tab Switching
-  const tabBtnJourney = document.getElementById("tab-btn-journey");
-  const tabBtnAudit = document.getElementById("tab-btn-audit");
-  const tabContentJourney = document.getElementById("tab-content-journey");
-  const tabContentAudit = document.getElementById("tab-content-audit");
-  const elPipelineContainer = document.getElementById("pipeline-container");
+async function loadMetrics() {
+  try {
+    renderMetrics(await fetchJSON("/api/metrics"));
+  } catch (e) {
+    $("#kpi-grid").innerHTML = `<div class="empty">Could not load metrics — ${esc(e.message)}</div>`;
+  }
+}
 
-  tabBtnJourney.addEventListener("click", () => {
-    tabBtnJourney.classList.add("active");
-    tabBtnAudit.classList.remove("active");
-    tabContentJourney.classList.add("active");
-    tabContentAudit.classList.remove("active");
+// -------------------------------------------------------------- drawer -----
+
+function phase(n, title, bodyHTML) {
+  return `
+    <div class="phase">
+      <div class="phase-head"><span class="phase-n">${n}</span><h4>${esc(title)}</h4></div>
+      <div class="phase-body">${bodyHTML}</div>
+    </div>`;
+}
+function kv(pairs) {
+  return `<dl class="kv">` + pairs.map(([k, v, mono]) => `<dt>${esc(k)}</dt><dd${mono ? ' class="mono"' : ""}>${v ?? "—"}</dd>`).join("") + `</dl>`;
+}
+
+function renderDetail(d) {
+  const body = $("#drawer-body");
+  $("#drawer-case").textContent = d.case_id;
+
+  const parts = [];
+
+  parts.push(phase(1, "Signal", kv([
+    ["Order", esc(d.event.order_id), true],
+    ["Customer", esc(d.event.customer_id), true],
+    ["Method", (d.event.method || "").toUpperCase()],
+    ["Amount", fmtINRFull(d.event.amount_rupees)],
+    ["Recurring", d.event.is_recurring ? `Yes${d.event.mandate_id ? " · " + esc(d.event.mandate_id) : ""}` : "No"],
+    ["Error", `${esc(d.event.error_code)} — ${esc(d.event.error_reason)}`],
+    ["Source / step", `${esc(d.event.error_source)} / ${esc(d.event.error_step)}`],
+  ])));
+
+  parts.push(phase(2, "Context", kv([
+    ["Cohort", `<span class="badge ${d.context.cohort === "HOLDOUT" ? "badge-mute" : "badge-info"}">${titleCase(d.context.cohort)}</span>`],
+    ["Attempt", `#${d.context.attempt_no} (${d.context.prior_failures_count} prior)`],
+    ["Triage", `${titleCase(d.context.triage_matched)} → ${titleCase(d.context.triage_recoverability)}${d.context.triage_is_ambiguous ? " (ambiguous → model)" : " (clean, rule-resolved)"}`],
+  ])));
+
+  const diag = d.ai_diagnosis;
+  parts.push(phase(3, "AI diagnosis", `
+    ${kv([
+      ["Recoverability", `<span class="badge badge-info">${titleCase(diag.recoverability)}</span>`],
+      ["Confidence", diag.confidence_pct !== null ? fmtPct(diag.confidence_pct) : "—"],
+      ["Fallback tier", diag.fallback_tier === 0 ? "0 — direct answer" : `${diag.fallback_tier} — degraded`],
+    ])}
+    <p class="rationale">${esc(diag.rationale)}</p>
+  `));
+
+  const ev = d.evidence;
+  parts.push(phase(4, "Evidence", `
+    ${kv([["Grounded", ev.is_grounded ? "Yes — cites real input fields" : "No evidence cited"]])}
+    ${ev.cited_fields?.length ? `<div class="chips" style="margin-top:8px">${ev.cited_fields.map((f) => `<span class="chip">${esc(f)}</span>`).join("")}</div>` : ""}
+    ${ev.risks?.length ? `<div style="margin-top:10px"><dt style="font-size:11.5px;color:var(--slate-light);margin-bottom:6px">Risks flagged</dt><div class="chips">${ev.risks.map((r) => `<span class="chip">${esc(r.category)}: ${esc(r.note)}</span>`).join("")}</div></div>` : ""}
+    ${ev.missing_information?.length ? `<div style="margin-top:10px"><dt style="font-size:11.5px;color:var(--slate-light);margin-bottom:6px">Missing information</dt><div class="chips">${ev.missing_information.map((m) => `<span class="chip">${esc(m)}</span>`).join("")}</div></div>` : ""}
+  `));
+
+  const pa = d.proposed_action;
+  parts.push(phase(5, "Proposed action", kv([
+    ["Action", titleCase(pa.proposed_action)],
+    ["Delay", `${pa.proposed_delay_minutes ?? 0} min`],
+    ["P(success)", pa.expected_success_probability_pct !== null ? fmtPct(pa.expected_success_probability_pct) : "—"],
+    ["Horizon", `${pa.expected_horizon_minutes ?? 0} min`],
+  ])));
+
+  const pr = d.policy_result;
+  parts.push(phase(6, "Policy result — zero-LLM gate", `
+    ${kv([
+      ["Decision", policyBadge(pr.policy_decision)],
+      ["Authorized action", titleCase(pr.authorized_action)],
+      ["Rules version", `v${pr.policy_version}`],
+      ["Execute at", pr.execute_at ? fmtDate(pr.execute_at) : "—"],
+    ])}
+    ${pr.fired_rules?.length ? `<div class="chips" style="margin-top:9px">${pr.fired_rules.map((r) => `<span class="chip is-rule">${esc(r)}</span>`).join("")}</div>` : ""}
+    <p class="rationale" style="margin-top:9px">${esc(pr.reason)}</p>
+  `));
+
+  const ex = d.execution;
+  parts.push(phase(7, "Execution", kv([
+    ["Dispatched", ex.is_dispatched ? "Yes" : "No"],
+    ["Idempotency key", ex.idempotency_key ? esc(ex.idempotency_key.slice(0, 20)) + "…" : "—", true],
+    ["Mode", ex.execution_mode ? ex.execution_mode.toUpperCase() : "—"],
+    ["Executed at", ex.executed_at ? fmtDate(ex.executed_at) : "—"],
+    ["Replayed", ex.replayed ? "Yes — idempotent, no re-spend" : "No"],
+  ])));
+
+  const oc = d.outcome;
+  const outcomeBadge = oc.succeeded === true ? "badge-ok" : oc.succeeded === false ? "badge-bad" : "badge-warn";
+  parts.push(phase(8, "Outcome", `
+    ${kv([
+      ["Final state", `<span class="badge badge-${STATE_BADGE[oc.final_state] || "mute"}">${titleCase(oc.final_state)}</span>`],
+      ["Status", `<span class="badge ${outcomeBadge}">${titleCase(oc.outcome_status)}</span>`],
+      ["Reason", esc(oc.abandon_reason || oc.error_detail || "—")],
+      ["Retryable", oc.retryable === null || oc.retryable === undefined ? "—" : oc.retryable ? "Yes" : "No"],
+    ])}
+  `));
+
+  parts.push(phase(9, "Audit trail", `
+    ${kv([
+      ["Chain", d.audit_trail.chain_valid ? `<span class="badge badge-ok">Verified</span>` : `<span class="badge badge-bad">Broken</span>`],
+      ["Events", d.audit_trail.total_events],
+    ])}
+    <div class="timeline" style="margin-top:14px">
+      ${d.audit_trail.timeline.map((e) => `
+        <div class="tl-item">
+          <div class="tl-head">
+            <span class="tl-type">${esc(e.event_type)}</span>
+            <span class="tl-actor">${esc(e.actor)}</span>
+          </div>
+          <div class="tl-hash">${fmtDate(e.timestamp)} · ${esc(e.hash?.slice(0, 16))}…</div>
+        </div>`).join("")}
+    </div>
+  `));
+
+  body.innerHTML = parts.join("");
+}
+
+async function openDrawer(caseId) {
+  const scrim = $("#scrim"), drawer = $("#drawer");
+  scrim.classList.add("open");
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  $("#drawer-body").innerHTML = `<div class="loading">Loading trace…</div>`;
+  $("#drawer-case").textContent = caseId;
+  try {
+    renderDetail(await fetchJSON(`/api/transaction/${encodeURIComponent(caseId)}`));
+  } catch (e) {
+    $("#drawer-body").innerHTML = `<div class="empty">Could not load trace — ${esc(e.message)}</div>`;
+  }
+}
+function closeDrawer() {
+  $("#scrim").classList.remove("open");
+  $("#drawer").classList.remove("open");
+  $("#drawer").setAttribute("aria-hidden", "true");
+}
+
+// -------------------------------------------------------------- wiring -----
+
+function debounce(fn, ms) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function init() {
+  renderDemoCards();
+  loadHealth();
+  loadMetrics();
+  loadTransactions();
+
+  $("#btn-refresh").addEventListener("click", () => { loadHealth(); loadMetrics(); loadTransactions(); });
+  $("#scrim").addEventListener("click", closeDrawer);
+  $("#btn-close").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDrawer();
+    if (e.key.toLowerCase() === "r" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+      loadHealth(); loadMetrics(); loadTransactions();
+    }
   });
 
-  tabBtnAudit.addEventListener("click", () => {
-    tabBtnAudit.classList.add("active");
-    tabBtnJourney.classList.remove("active");
-    tabContentAudit.classList.add("active");
-    tabContentJourney.classList.remove("active");
-  });
+  $("#q").addEventListener("input", debounce((e) => {
+    state.search = e.target.value.trim();
+    state.offset = 0;
+    loadTransactions();
+  }, 320));
 
-  // Open Trace Drawer & Fetch Event Sequence & 9-Phase Detail
-  async function openTraceDrawer(caseId) {
-    elDrawerCaseId.textContent = caseId;
-    elPipelineContainer.innerHTML = '<div class="text-muted" style="padding: 1rem 0;">Loading 9-phase transaction journey...</div>';
-    elTimelineContainer.innerHTML = '<div class="text-muted" style="padding: 1rem 0;">Loading cryptographic audit chain...</div>';
-    elTraceDrawer.classList.add("open");
-    elTraceDrawer.setAttribute("aria-hidden", "false");
-
-    // Fetch 9-phase detail and timeline in parallel
-    try {
-      const [detailRes, traceRes] = await Promise.all([
-        fetch(`/api/transaction/${encodeURIComponent(caseId)}`),
-        fetch(`/api/trace/${encodeURIComponent(caseId)}`),
-      ]);
-
-      if (!detailRes.ok) throw new Error(`HTTP error ${detailRes.status}`);
-      const detail = await detailRes.json();
-      const trace = traceRes.ok ? await traceRes.json() : null;
-
-      // Render Meta Bar
-      elDrawerMetaBar.innerHTML = `
-        <div class="meta-item">
-          <span class="meta-item-label">Order ID</span>
-          <span class="meta-item-value">${escapeHTML(detail.event.order_id)}</span>
-        </div>
-        <div class="meta-item">
-          <span class="meta-item-label">Amount</span>
-          <span class="meta-item-value">${formatINR(detail.event.amount_rupees)}</span>
-        </div>
-        <div class="meta-item">
-          <span class="meta-item-label">Cohort / State</span>
-          <span class="meta-item-value">${escapeHTML(detail.context.cohort)} &bull; ${escapeHTML(detail.outcome.final_state)}</span>
-        </div>
-      `;
-
-      // Render 9-Phase Journey
-      render9PhaseJourney(detail);
-
-      // Render Timeline
-      renderAuditTimeline(trace || detail.audit_trail);
-    } catch (err) {
-      console.error("Failed to load transaction detail:", err);
-      elPipelineContainer.innerHTML = '<div class="text-muted" style="color: var(--accent-rose);">Failed to load journey details.</div>';
-      elTimelineContainer.innerHTML = '<div class="text-muted" style="color: var(--accent-rose);">Failed to load trace details.</div>';
-    }
-  }
-
-  // Render the 9-Phase Journey Cards
-  function render9PhaseJourney(d) {
-    const ev = d.event;
-    const ctx = d.context;
-    const diag = d.ai_diagnosis;
-    const evi = d.evidence;
-    const prop = d.proposed_action;
-    const pol = d.policy_result;
-    const exec = d.execution;
-    const out = d.outcome;
-    const aud = d.audit_trail;
-
-    elPipelineContainer.innerHTML = `
-      <!-- Phase 1: Event -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">1</span>
-            <span class="phase-title">Event & Signal Ingested</span>
-          </div>
-          <span class="badge badge-scheduled mono-cell">${escapeHTML(ev.method)}</span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Error Code</span>
-            <span class="phase-item-value mono">${escapeHTML(ev.error_code)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Error Step</span>
-            <span class="phase-item-value">${escapeHTML(ev.error_step)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Error Reason</span>
-            <span class="phase-item-value mono" style="color: var(--accent-rose);">${escapeHTML(ev.error_reason)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Amount</span>
-            <span class="phase-item-value amount-text">${formatINR(ev.amount_rupees)}</span>
-          </div>
-        </div>
-        ${ev.error_description ? `<div class="rationale-quote">"${escapeHTML(ev.error_description)}"</div>` : ""}
-      </div>
-
-      <!-- Phase 2: Context -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">2</span>
-            <span class="phase-title">Operational Context</span>
-          </div>
-          <span class="badge ${ctx.cohort === "TREATED" ? "badge-treated" : "badge-holdout"}">${escapeHTML(ctx.cohort)}</span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Attempt Count</span>
-            <span class="phase-item-value">Attempt #${ctx.attempt_no}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Prior Failures</span>
-            <span class="phase-item-value">${ctx.prior_failures_count}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Triage Route</span>
-            <span class="phase-item-value">${ctx.triage_is_ambiguous ? "Ambiguous (AI Guided)" : `Deterministic (${escapeHTML(ctx.triage_matched)})`}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Recurring Mandate</span>
-            <span class="phase-item-value">${ctx.is_recurring ? "Yes" : "No"}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Phase 3: AI Diagnosis -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">3</span>
-            <span class="phase-title">AI Diagnosis</span>
-          </div>
-          <span class="badge badge-recovered">${escapeHTML(diag.recoverability)}</span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Recoverability</span>
-            <span class="phase-item-value">${escapeHTML(diag.recoverability)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Confidence Score</span>
-            <span class="phase-item-value">${diag.confidence_pct !== null ? `${diag.confidence_pct}%` : "100.0% (Rules)"}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Fallback Tier</span>
-            <span class="phase-item-value">Tier ${diag.fallback_tier}</span>
-          </div>
-        </div>
-        ${diag.confidence_pct !== null ? `
-          <div class="confidence-bar-wrap">
-            <div class="confidence-bar-fill" style="width: ${Math.min(diag.confidence_pct, 100)}%;"></div>
-          </div>
-        ` : ""}
-        <div class="rationale-quote">${escapeHTML(diag.rationale)}</div>
-      </div>
-
-      <!-- Phase 4: Evidence -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">4</span>
-            <span class="phase-title">Evidence & Grounding</span>
-          </div>
-          <span class="badge ${evi.is_grounded ? "badge-recovered" : "badge-holdout-closed"}">
-            ${evi.is_grounded ? "Grounded" : "Taxonomy Prior"}
-          </span>
-        </div>
-        <span class="phase-item-label">Cited Input Fields:</span>
-        <div class="tags-list">
-          ${(evi.cited_fields && evi.cited_fields.length > 0)
-            ? evi.cited_fields.map(f => `<span class="evidence-chip">${escapeHTML(f)}</span>`).join("")
-            : '<span class="text-muted" style="font-size: 0.8rem;">No explicit field citations (deterministic prior)</span>'}
-        </div>
-        ${(evi.risks && evi.risks.length > 0) ? `
-          <div style="margin-top: 0.65rem;">
-            <span class="phase-item-label">Identified Risks:</span>
-            <div class="tags-list">
-              ${evi.risks.map(r => `<span class="risk-chip">${escapeHTML(r.category || r)}</span>`).join("")}
-            </div>
-          </div>
-        ` : ""}
-      </div>
-
-      <!-- Phase 5: Proposed Action -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">5</span>
-            <span class="phase-title">Proposed Action</span>
-          </div>
-          <span class="badge ${prop.proposed_action === "RETRY" ? "badge-recovered" : "badge-abandoned"}">
-            ${escapeHTML(prop.proposed_action)}
-          </span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Action</span>
-            <span class="phase-item-value">${escapeHTML(prop.proposed_action)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Proposed Delay</span>
-            <span class="phase-item-value">${prop.proposed_delay_minutes} min</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Expected Success P(succ)</span>
-            <span class="phase-item-value">${prop.expected_success_probability_pct !== null ? `${prop.expected_success_probability_pct}%` : "N/A"}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Horizon</span>
-            <span class="phase-item-value">${prop.expected_horizon_minutes} min</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Phase 6: Policy Result -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">6</span>
-            <span class="phase-title">Zero-LLM Policy Result</span>
-          </div>
-          <span class="badge ${pol.policy_decision === "ALLOW" ? "badge-recovered" : pol.policy_decision === "REVIEW" ? "badge-quarantined" : "badge-abandoned"}">
-            ${escapeHTML(pol.policy_decision)}
-          </span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Policy Decision</span>
-            <span class="phase-item-value">${escapeHTML(pol.policy_decision)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Authorized Action</span>
-            <span class="phase-item-value">${escapeHTML(pol.authorized_action)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Rules Version</span>
-            <span class="phase-item-value">v${pol.policy_version}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Is Executable</span>
-            <span class="phase-item-value">${pol.is_executable ? "Yes (Dispatched)" : "No (Blocked)"}</span>
-          </div>
-        </div>
-        ${(pol.fired_rules && pol.fired_rules.length > 0) ? `
-          <div style="margin-top: 0.5rem;">
-            <span class="phase-item-label">Fired Safety Rules:</span>
-            <div class="tags-list">
-              ${pol.fired_rules.map(r => `<span class="rule-chip">${escapeHTML(r)}</span>`).join("")}
-            </div>
-          </div>
-        ` : ""}
-        <div class="rationale-quote">Policy Verdict Reason: "${escapeHTML(pol.reason)}"</div>
-      </div>
-
-      <!-- Phase 7: Execution -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">7</span>
-            <span class="phase-title">Execution Dispatch</span>
-          </div>
-          <span class="badge ${exec.is_dispatched ? "badge-scheduled" : "badge-holdout-closed"}">
-            ${exec.is_dispatched ? "Dispatched" : "Not Executed"}
-          </span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Idempotency Key</span>
-            <span class="phase-item-value mono" style="font-size: 0.75rem;">${exec.idempotency_key ? escapeHTML(exec.idempotency_key.substring(0, 16)) + "…" : "N/A"}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Execution Mode</span>
-            <span class="phase-item-value uppercase">${escapeHTML(exec.execution_mode)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Replayed</span>
-            <span class="phase-item-value">${exec.replayed ? "Yes (Idempotent)" : "No"}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Phase 8: Outcome -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">8</span>
-            <span class="phase-title">Final Case Outcome</span>
-          </div>
-          <span class="badge ${getStateBadgeClass(out.final_state)}">
-            ${escapeHTML(out.final_state)}
-          </span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Final State</span>
-            <span class="phase-item-value">${escapeHTML(out.final_state)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Outcome Status</span>
-            <span class="phase-item-value">${escapeHTML(out.outcome_status)}</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">Succeeded</span>
-            <span class="phase-item-value">${out.succeeded === true ? "True (Recovered)" : out.succeeded === false ? "False (Failed)" : "None"}</span>
-          </div>
-        </div>
-        ${out.abandon_reason ? `<div class="rationale-quote">Abandon Reason: "${escapeHTML(out.abandon_reason)}"</div>` : ""}
-      </div>
-
-      <!-- Phase 9: Audit Trail Summary -->
-      <div class="phase-card">
-        <div class="phase-header">
-          <div class="phase-title-group">
-            <span class="phase-num">9</span>
-            <span class="phase-title">Cryptographic Audit Record</span>
-          </div>
-          <span class="badge ${aud.chain_valid ? "badge-recovered" : "badge-abandoned"}">
-            ${aud.chain_valid ? "🛡️ Chain Verified" : "⚠️ Integrity Failure"}
-          </span>
-        </div>
-        <div class="phase-grid">
-          <div class="phase-item">
-            <span class="phase-item-label">Total Audit Events</span>
-            <span class="phase-item-value">${aud.total_events} recorded</span>
-          </div>
-          <div class="phase-item">
-            <span class="phase-item-label">SHA-256 Ledger Status</span>
-            <span class="phase-item-value" style="color: var(--accent-emerald);">Immutable Valid</span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  // Render the Audit Trail Timeline
-  function renderAuditTimeline(data) {
-    const timeline = data.timeline || data.events || [];
-    if (timeline.length === 0) {
-      elTimelineContainer.innerHTML = '<div class="text-muted">No audit events recorded for this case.</div>';
-      return;
-    }
-
-    elTimelineContainer.innerHTML = timeline
-      .map((evt) => {
-        let nodeClass = "";
-        if (evt.event_type.includes("RESULT") || evt.event_type === "RECONCILIATION_RESOLVED" || evt.event_type === "DECISION_RECORDED") {
-          nodeClass = "node-success";
-        } else if (evt.event_type.includes("DENY") || evt.event_type === "ACTION_REFUSED") {
-          nodeClass = "node-deny";
-        } else if (evt.event_type.includes("UNCERTAIN") || evt.event_type.includes("REVIEW")) {
-          nodeClass = "node-review";
-        }
-
-        const shortHash = evt.hash ? `${evt.hash.substring(0, 10)}…` : "N/A";
-        const shortPrev = evt.prev_hash ? `${evt.prev_hash.substring(0, 8)}…` : "GENESIS";
-
-        return `
-          <div class="timeline-step">
-            <div class="timeline-node ${nodeClass}"></div>
-            <div class="timeline-card">
-              <div class="timeline-card-header">
-                <span class="event-type-badge">#${evt.seq} ${escapeHTML(evt.event_type)}</span>
-                <span class="event-actor">${escapeHTML(evt.actor)}</span>
-              </div>
-              <div class="timeline-payload">${escapeHTML(JSON.stringify(evt.payload, null, 2))}</div>
-              <div class="hash-info-row">
-                <span>prev: ${shortPrev}</span>
-                <span class="hash-badge">hash: ${shortHash}</span>
-              </div>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
-  }
-
-  function closeTraceDrawer() {
-    elTraceDrawer.classList.remove("open");
-    elTraceDrawer.setAttribute("aria-hidden", "true");
-  }
-
-  function escapeHTML(str) {
-    if (str === null || str === undefined) return "";
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  // Event Listeners
-  elBtnCloseDrawer.addEventListener("click", closeTraceDrawer);
-  elDrawerOverlay.addEventListener("click", closeTraceDrawer);
-
-  elBtnRefresh.addEventListener("click", () => {
-    fetchMetrics();
-    fetchTransactions();
-  });
-
-  // Debounced Search
-  let searchTimeout;
-  elInputSearch.addEventListener("input", () => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(fetchTransactions, 300);
-  });
-
-  // Developer Demo Controls
-  const demoButtons = document.querySelectorAll(".btn-demo");
-  demoButtons.forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const scenario = btn.getAttribute("data-scenario");
-      if (!scenario) return;
-
-      btn.classList.add("loading");
-      const origContent = btn.innerHTML;
-      btn.innerHTML = `<span style="font-size: 0.85rem;">⏳ Triggering ${escapeHTML(scenario)}...</span>`;
-
-      try {
-        const res = await fetch("/api/demo/trigger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scenario }),
-        });
-
-        if (!res.ok) throw new Error(`Demo trigger error ${res.status}`);
-        const data = await res.json();
-
-        // Refresh metrics and transaction ledger
-        await Promise.all([fetchMetrics(), fetchTransactions()]);
-
-        // Auto-open 9-Phase Transaction Detail Drawer for the generated case
-        if (data.case_id) {
-          openTraceDrawer(data.case_id);
-        }
-      } catch (err) {
-        console.error("Demo scenario trigger failed:", err);
-        alert(`Failed to trigger scenario: ${err.message}`);
-      } finally {
-        btn.classList.remove("loading");
-        btn.innerHTML = origContent;
-      }
+  const filterMap = { "#f-state": "state", "#f-method": "method", "#f-cohort": "cohort" };
+  Object.entries(filterMap).forEach(([sel, key]) => {
+    $(sel).addEventListener("change", (e) => {
+      state.filters[key] = e.target.value;
+      state.offset = 0;
+      loadTransactions();
     });
   });
 
-  // Initial Load
-  fetchMetrics();
-  fetchTransactions();
-});
+  $("#btn-prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - state.limit); loadTransactions(); });
+  $("#btn-next").addEventListener("click", () => { state.offset += state.limit; loadTransactions(); });
 
+  setInterval(loadHealth, 30000);
+}
+
+document.addEventListener("DOMContentLoaded", init);

@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from agent.audit import append
 from agent.clock import Clock, VirtualClock
 from agent.dashboard import get_transaction_detail
 from agent.diagnosis.port import DiagnosisInput
@@ -233,7 +234,16 @@ def trigger_policy_rejection(
 
     executor = SimulatedExecutor(conn, clock, outcome_fn=lambda v: 0.0, rng=random.Random(ts_suffix))
     ingest(conn, pf, seed=42, rules=rules, now=now)
-    # Simulate attempt count reaching attempt cap (4 for card)
+    # Simulate prior failed attempts in audit log and counter to reach attempt cap (4 for card)
+    for att in range(1, 5):
+        append(
+            conn,
+            case_id=case_id,
+            actor="executor",
+            event_type="ACTION_RESULT",
+            payload={"action": "RETRY", "attempt_no": att, "succeeded": False, "mode": "SIM"},
+            ts=now,
+        )
     conn.execute("UPDATE cases SET attempts = 4 WHERE case_id = ?", (case_id,))
 
     process_case(

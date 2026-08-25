@@ -121,6 +121,60 @@ def compute_dashboard_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
         for r in cohort_rows
     }
 
+    # Method breakdown
+    method_rows = cursor.execute(
+        """
+        SELECT method,
+               COUNT(*) AS total,
+               SUM(CASE WHEN state = 'RECOVERED' THEN 1 ELSE 0 END) AS recovered,
+               COALESCE(SUM(amount_paise), 0) AS paise,
+               COALESCE(SUM(CASE WHEN state = 'RECOVERED' THEN amount_paise ELSE 0 END), 0) AS rec_paise
+          FROM cases
+         GROUP BY method
+        """
+    ).fetchall()
+    methods_summary = {
+        r["method"]: {
+            "total": r["total"],
+            "recovered": r["recovered"],
+            "amount_rupees": round(r["paise"] / 100.0, 2),
+            "recovered_rupees": round(r["rec_paise"] / 100.0, 2),
+            "recovery_rate_pct": round((r["recovered"] / r["total"] * 100.0), 1) if r["total"] > 0 else 0.0,
+        }
+        for r in method_rows
+    }
+
+    # Error reason breakdown
+    error_rows = cursor.execute(
+        """
+        SELECT json_extract(error, '$.reason') AS reason,
+               COUNT(*) AS total,
+               SUM(CASE WHEN state = 'RECOVERED' THEN 1 ELSE 0 END) AS recovered
+          FROM cases
+         GROUP BY json_extract(error, '$.reason')
+         ORDER BY total DESC
+         LIMIT 6
+        """
+    ).fetchall()
+    error_summary = [
+        {
+            "reason": r["reason"] or "unknown",
+            "total": r["total"],
+            "recovered": r["recovered"],
+        }
+        for r in error_rows
+    ]
+
+    # State distribution
+    state_rows = cursor.execute(
+        """
+        SELECT state, COUNT(*) AS count
+          FROM cases
+         GROUP BY state
+        """
+    ).fetchall()
+    state_distribution = {r["state"]: r["count"] for r in state_rows}
+
     metrics = {
         "revenue_at_risk_rupees": revenue_at_risk_rupees,
         "recovered_value_rupees": recovered_value_rupees,
@@ -132,6 +186,9 @@ def compute_dashboard_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
         "total_cases": total_cases,
         "recovered_cases": recovered_count,
         "cohorts": cohort_summary,
+        "methods": methods_summary,
+        "errors": error_summary,
+        "states": state_distribution,
     }
 
     logger.log_event("dashboard.metrics.computed", data=metrics)
@@ -433,10 +490,13 @@ def get_transaction_detail(conn: sqlite3.Connection, case_id: str) -> dict[str, 
     decision_val = policy_payload.get("decision", "DENY")
     phase_policy = {
         "policy_decision": decision_val,
+        "decision": decision_val,
         "authorized_action": policy_payload.get("action", "STOP"),
+        "action": policy_payload.get("action", "STOP"),
         "fired_rules": policy_payload.get("fired_rules", []),
         "reason": policy_payload.get("reason", "No reason provided"),
         "policy_version": policy_payload.get("rules_version", 2),
+        "rules_version": policy_payload.get("rules_version", 2),
         "execute_at": policy_payload.get("execute_at"),
         "is_executable": decision_val in ("ALLOW", "DEFER") and policy_payload.get("action") != "STOP",
     }
@@ -494,13 +554,30 @@ def get_transaction_detail(conn: sqlite3.Connection, case_id: str) -> dict[str, 
     decision_record = events_by_type.get("DECISION_RECORDED", {})
     phase_audit = {
         "chain_valid": chain_valid,
+        "chain_verified": chain_valid,
         "total_events": len(parsed_events),
         "decision_record": decision_record,
         "timeline": parsed_events,
     }
 
+    phases_dict = {
+        "event": phase_event,
+        "context": phase_context,
+        "diagnosis": phase_diagnosis,
+        "ai_diagnosis": phase_diagnosis,
+        "evidence": phase_evidence,
+        "proposal": phase_proposal,
+        "proposed_action": phase_proposal,
+        "policy_result": phase_policy,
+        "policy_verdict": phase_policy,
+        "execution": phase_execution,
+        "outcome": phase_outcome,
+        "audit_trail": phase_audit,
+    }
+
     detail = {
         "case_id": case_id,
+        "phases": phases_dict,
         "event": phase_event,
         "context": phase_context,
         "ai_diagnosis": phase_diagnosis,

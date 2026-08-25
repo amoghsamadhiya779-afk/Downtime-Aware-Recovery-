@@ -35,7 +35,9 @@ EVAL_DIR = Path("eval")
 
 def make_outcome_fn(ground_truth):
     def outcome_fn(verdict):
-        gt = ground_truth[verdict.case_id]
+        gt = ground_truth.get(verdict.case_id)
+        if not gt:
+            return 0.5
         if "DOWNTIME_DEFER" in verdict.fired_rules:
             return gt.p_retry_after_downtime
         return gt.p_retry_now
@@ -88,9 +90,9 @@ def run(db_path: Path, gt_path: Path, out_path: Path, *, seed: int, provider: st
         diagnosis_port = StubDiagnosis()
 
     case_rows = conn.execute("SELECT case_id, created_at, state FROM cases ORDER BY created_at ASC").fetchall()
-    case_ids = [r["case_id"] for r in case_rows]
+    case_ids = [r["case_id"] for r in case_rows if r["case_id"] in ground_truth]
     for r in case_rows:
-        if r["state"] == "DETECTED":
+        if r["case_id"] in ground_truth and r["state"] == "DETECTED":
             clock.set(datetime.fromisoformat(r["created_at"]))
             process_case(
                 conn,

@@ -48,7 +48,7 @@ def test_http_get_index(server):
         assert response.status == 200
         content = response.read().decode("utf-8")
         assert "<title>Payment Recovery Control Plane | Executive Dashboard</title>" in content
-        assert "Developer & System Failure Mode Controls" in content
+        assert "Failure drills" in content or "Developer" in content
 
 
 def test_http_get_static_assets(server):

@@ -1,0 +1,75 @@
+{
+  "manifest": {
+    "corpus": "dev",
+    "seed": 42,
+    "scenario": "S1",
+    "n": 300,
+    "generator_version": "0.1.0"
+  },
+  "incremental": {
+    "incremental_per_1000": 5266944.625550661,
+    "ci_lower": 2236886.1396415425,
+    "ci_upper": 7998325.225393761,
+    "gross_treated_rupees": 7576.654625550661,
+    "gross_holdout_rupees": 2309.71,
+    "n_boot": 2000,
+    "n_treated": 227,
+    "n_holdout": 73
+  },
+  "gross": {
+    "treated_rate": 0.29515418502202645,
+    "holdout_rate": 0.0684931506849315
+  },
+  "ai": {
+    "macro_f1": 0.15079365079365079,
+    "n_ambiguous": 88,
+    "per_class": {
+      "TRANSIENT_INFRA": {
+        "precision": 0.4318181818181818,
+        "recall": 1.0,
+        "f1": 0.6031746031746031,
+        "support": 38
+      },
+      "CUSTOMER_FIXABLE": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 20
+      },
+      "INSTRUMENT_INVALID": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 14
+      },
+      "TERMINAL": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 16
+      }
+    }
+  },
+  "secondary": {
+    "wasted_attempt_rate": 0.06593406593406594,
+    "wasted_n": 12,
+    "total_attempts": 182,
+    "n_deferred": 0,
+    "n_abandoned": 49,
+    "n_holdout_closed": 73
+  },
+  "safety": {
+    "holdout_contamination": 0,
+    "cap_breach": 0,
+    "veto_rate": 0.22916666666666666,
+    "veto_n": 55,
+    "veto_total": 240
+  },
+  "system": {
+    "chain_ok": true,
+    "counters_ok": true,
+    "unverified_rules": [
+      "ATTEMPT_CAP"
+    ]
+  }
+}
