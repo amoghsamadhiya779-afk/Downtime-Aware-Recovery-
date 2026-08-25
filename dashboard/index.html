@@ -56,31 +56,98 @@
     </div>
   </div>
 
+  <!-- Project intro -->
+  <div class="intro-panel">
+    <span class="intro-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
+    </span>
+    <div>
+      <h2>What this is</h2>
+      <p>
+        A downtime-aware recovery agent for failed payments: an AI diagnosis layer <strong>proposes</strong>
+        a recoverability class and action, a deterministic policy engine <strong>authorizes</strong> it against
+        fixed rules the model cannot see or bypass, and only an authorized verdict ever reaches an executor.
+        The differentiating claim isn't the AI — it's that recovered value is measured
+        <strong>against a randomized holdout arm</strong>, not reported as a gross total the model could take credit for regardless of whether it helped.
+      </p>
+    </div>
+  </div>
+
+  <!-- Hero: incremental impact -->
+  <section class="section" style="margin-top:0">
+    <div class="hero-panel rcp-stagger">
+      <div class="hero-figure-wrap">
+        <span class="eyebrow">Incremental recovery vs. holdout</span>
+        <div class="hero-figure" id="hero-figure">—</div>
+        <p class="hero-caption" id="hero-caption">Comparing the treated arm's recovery rate against a randomized control that received no intervention.</p>
+      </div>
+      <div class="hero-compare" id="hero-compare"></div>
+    </div>
+  </section>
+
   <!-- KPIs -->
-  <section class="section" aria-labelledby="kpi-h" style="margin-top:0">
+  <section class="section" aria-labelledby="kpi-h">
     <h2 id="kpi-h" class="visually-hidden">Key metrics</h2>
-    <div class="kpi-grid" id="kpi-grid"></div>
+    <div class="kpi-grid rcp-stagger" id="kpi-grid"></div>
   </section>
 
   <!-- Breakdown -->
   <section class="section">
     <div class="section-head">
       <h2>Breakdown</h2>
-      <span class="hint">Recovery rate by payment method, and the failure reasons driving volume</span>
+      <span class="hint">Recovery rate by payment method, failure-reason volume, and where cases sit right now</span>
     </div>
-    <div class="grid-3">
+    <div class="grid-3 rcp-stagger">
       <div class="panel">
-        <div class="panel-head"><h3>By method</h3></div>
-        <div class="panel-body"><div class="bars" id="methods"></div></div>
+        <div class="panel-head chart-panel-head">
+          <h3>Recovery by method</h3>
+          <button class="chart-toggle" data-toggle="methods" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Table
+          </button>
+        </div>
+        <div class="panel-body">
+          <div class="chart-mount" id="methods"></div>
+          <table class="chart-table" id="methods-table"></table>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3>Top failure reasons</h3></div>
-        <div class="panel-body"><div class="bars" id="errors"></div></div>
+        <div class="panel-head chart-panel-head">
+          <h3>Top failure reasons</h3>
+          <button class="chart-toggle" data-toggle="errors" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Table
+          </button>
+        </div>
+        <div class="panel-body">
+          <div class="chart-mount" id="errors"></div>
+          <table class="chart-table" id="errors-table"></table>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3>Case states</h3></div>
-        <div class="panel-body"><div class="states" id="states"></div></div>
+        <div class="panel-head chart-panel-head">
+          <h3>Case states</h3>
+          <button class="chart-toggle" data-toggle="states" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Table
+          </button>
+        </div>
+        <div class="panel-body">
+          <div class="chart-mount" id="states"></div>
+          <table class="chart-table" id="states-table"></table>
+        </div>
       </div>
+    </div>
+  </section>
+
+  <!-- Funnel -->
+  <section class="section">
+    <div class="section-head">
+      <h2>Recovery funnel</h2>
+      <span class="hint">Every case, from detection to recovered value</span>
+    </div>
+    <div class="panel">
+      <div class="panel-body" id="funnel"></div>
     </div>
   </section>
 
@@ -90,7 +157,7 @@
       <h2>Failure drills</h2>
       <span class="hint">Trigger a fault and watch it get contained — each writes a real, auditable trace</span>
     </div>
-    <div class="demo-grid" id="demos"></div>
+    <div class="demo-grid rcp-stagger" id="demos"></div>
   </section>
 
   <!-- Ledger -->

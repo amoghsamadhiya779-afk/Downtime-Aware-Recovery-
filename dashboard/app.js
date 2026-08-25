@@ -63,6 +63,224 @@ const STATE_BADGE = {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+const REDUCE_MOTION = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ============================================================================
+   viz — a small, self-contained chart module.
+   Every form/color/interaction choice here follows the dataviz skill loaded
+   for this pass: sequential blue for magnitude ranking, categorical (validated,
+   fixed order) only for true part-to-whole identity, emphasis (accent vs gray)
+   for the treated-vs-holdout comparison, status tokens only for state/policy
+   badges. No dependency — hand-rolled so it matches this exact palette.
+   ========================================================================= */
+
+const viz = (() => {
+  const CAT = ["--viz-cat-1", "--viz-cat-2", "--viz-cat-3", "--viz-cat-4", "--viz-cat-5", "--viz-cat-6", "--viz-cat-7", "--viz-cat-8"];
+  const root = getComputedStyle(document.documentElement);
+  const cssvar = (name) => root.getPropertyValue(name).trim();
+
+  // ---- count-up: RAF easing, snaps instantly under reduced-motion ----
+  function countUp(el, to, { prefix = "", suffix = "", decimals = 0, duration = 900 } = {}) {
+    if (!el) return;
+    const from = 0;
+    if (REDUCE_MOTION || !isFinite(to)) {
+      el.textContent = prefix + to.toLocaleString("en-IN", { maximumFractionDigits: decimals, minimumFractionDigits: decimals }) + suffix;
+      return;
+    }
+    const t0 = performance.now();
+    const ease = (t) => 1 - Math.pow(1 - t, 3); // cubic ease-out
+    function frame(now) {
+      const p = Math.min(1, (now - t0) / duration);
+      const v = from + (to - from) * ease(p);
+      el.textContent = prefix + v.toLocaleString("en-IN", { maximumFractionDigits: decimals, minimumFractionDigits: decimals }) + suffix;
+      if (p < 1) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---- shared tooltip singleton ----
+  let tipEl = null;
+  function tip() {
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.className = "viz-tooltip";
+      tipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tipEl);
+    }
+    return tipEl;
+  }
+  function showTip(target, rows) {
+    const el = tip();
+    el.innerHTML = "";
+    rows.forEach(({ label, value }) => {
+      const line = document.createElement("div");
+      const vSpan = document.createElement("span");
+      vSpan.className = "vt-value";
+      vSpan.textContent = value; // textContent only — labels/values trace to data
+      const lSpan = document.createElement("span");
+      lSpan.className = "vt-label";
+      lSpan.textContent = " " + label;
+      line.appendChild(vSpan);
+      line.appendChild(lSpan);
+      el.appendChild(line);
+    });
+    const r = target.getBoundingClientRect();
+    el.classList.add("is-visible");
+    // measure after content is set, then clamp inside the viewport
+    const tw = el.offsetWidth, th = el.offsetHeight;
+    let left = r.left + r.width / 2 - tw / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+    let top = r.top - th - 10;
+    if (top < 8) top = r.bottom + 10;
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+  }
+  function hideTip() {
+    if (tipEl) tipEl.classList.remove("is-visible");
+  }
+
+  // ---- table-view twin: renders a plain <table> beside every chart ----
+  function renderTable(tableEl, headers, rows) {
+    if (!tableEl) return;
+    const thead = `<thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>`;
+    const tbody = `<tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i > 0 ? "num" : ""}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+    tableEl.innerHTML = thead + tbody;
+  }
+  function wireToggle(btn) {
+    const key = btn.dataset.toggle;
+    const mount = document.getElementById(key);
+    const table = document.getElementById(key + "-table");
+    btn.addEventListener("click", () => {
+      const showingTable = btn.getAttribute("aria-pressed") === "true";
+      btn.setAttribute("aria-pressed", String(!showingTable));
+      mount.classList.toggle("is-hidden", !showingTable);
+      table.classList.toggle("is-visible", !showingTable);
+    });
+  }
+
+  // ---- ranked bar: sequential magnitude, one hue, direct label at tip ----
+  function rankedBar(mountEl, tableEl, items, { valueFmt, tooltipRows, headers, tableRows }) {
+    if (!items.length) {
+      mountEl.innerHTML = `<div class="empty" style="padding:18px 0">No data yet</div>`;
+      return;
+    }
+    const max = Math.max(...items.map((i) => i.value), 1);
+    mountEl.innerHTML = `<div class="rbar-list">${items
+      .map((it, idx) => {
+        const pct = Math.max(4, (it.value / max) * 100);
+        return `
+        <div class="rbar-row" tabindex="0" data-idx="${idx}" aria-label="${esc(it.name)}">
+          <span class="rbar-name">${esc(it.name)}</span>
+          <div class="rbar-track">
+            <div class="rbar-fill ${pct < 18 ? "is-tiny" : ""}" style="width:0" data-target="${pct}">
+              <span class="rbar-tip">${esc(valueFmt(it))}</span>
+            </div>
+          </div>
+        </div>`;
+      })
+      .join("")}</div>`;
+
+    requestAnimationFrame(() => {
+      $$(".rbar-fill", mountEl).forEach((f) => {
+        const w = f.dataset.target + "%";
+        if (REDUCE_MOTION) f.style.width = w;
+        else requestAnimationFrame(() => (f.style.width = w));
+      });
+    });
+
+    $$(".rbar-row", mountEl).forEach((row) => {
+      const it = items[Number(row.dataset.idx)];
+      const track = $(".rbar-track", row);
+      const enter = () => showTip(track, tooltipRows(it));
+      row.addEventListener("pointerenter", enter);
+      row.addEventListener("focus", enter);
+      row.addEventListener("pointerleave", hideTip);
+      row.addEventListener("blur", hideTip);
+    });
+
+    renderTable(tableEl, headers, tableRows(items));
+  }
+
+  // ---- stacked bar: categorical part-to-whole, validated fixed hue order ----
+  function stackedBar(mountEl, legendEl, tableEl, segments, { headers, tableRows }) {
+    const total = segments.reduce((s, x) => s + x.value, 0);
+    if (!total) {
+      mountEl.innerHTML = `<div class="empty" style="padding:18px 0">No cases yet</div>`;
+      return;
+    }
+    const withColor = segments.map((s, i) => ({ ...s, color: `var(${CAT[i % CAT.length]})` }));
+
+    mountEl.innerHTML = `
+      <div class="sbar-track">
+        ${withColor.map((s, i) => `<div class="sbar-seg" tabindex="0" data-idx="${i}" style="width:0;background:${s.color}" aria-label="${esc(s.name)}"></div>`).join("")}
+      </div>
+      <div class="sbar-legend">
+        ${withColor.map((s) => `<span class="sbar-key"><span class="swatch" style="background:${s.color}"></span>${esc(s.name)} <span class="n">${s.value}</span></span>`).join("")}
+      </div>`;
+
+    requestAnimationFrame(() => {
+      $$(".sbar-seg", mountEl).forEach((seg, i) => {
+        const pct = (withColor[i].value / total) * 100;
+        const w = pct + "%";
+        if (REDUCE_MOTION) seg.style.width = w;
+        else requestAnimationFrame(() => (seg.style.width = w));
+      });
+    });
+
+    $$(".sbar-seg", mountEl).forEach((seg) => {
+      const s = withColor[Number(seg.dataset.idx)];
+      const pct = ((s.value / total) * 100).toFixed(1);
+      const enter = () => showTip(seg, [{ label: s.name, value: `${s.value} (${pct}%)` }]);
+      seg.addEventListener("pointerenter", enter);
+      seg.addEventListener("focus", enter);
+      seg.addEventListener("pointerleave", hideTip);
+      seg.addEventListener("blur", hideTip);
+    });
+
+    renderTable(tableEl, headers, tableRows(segments, total));
+  }
+
+  // ---- funnel: ordinal ramp, stage-over-stage drop-off ----
+  function funnel(mountEl, stages) {
+    const max = Math.max(...stages.map((s) => s.value), 1);
+    const steps = ["--viz-seq-650", "--viz-seq-450", "--viz-seq-250"];
+    mountEl.innerHTML = `<div class="funnel">${stages
+      .map((s, i) => {
+        const pct = Math.max(6, (s.value / max) * 100);
+        const drop = i > 0 ? stages[i - 1].value - s.value : null;
+        const dropPct = i > 0 && stages[i - 1].value > 0 ? ((drop / stages[i - 1].value) * 100).toFixed(0) : null;
+        return `
+        <div class="funnel-row" tabindex="0" data-idx="${i}">
+          <span class="funnel-label">${esc(s.name)}</span>
+          <div class="funnel-track"><div class="funnel-fill" style="width:0;background:var(${steps[i % steps.length]})" data-target="${pct}"></div></div>
+          <span class="funnel-val">${s.value.toLocaleString("en-IN")}</span>
+        </div>
+        ${drop !== null && drop > 0 ? `<div class="funnel-drop">↓ ${drop.toLocaleString("en-IN")} (${dropPct}%) did not reach this stage</div>` : ""}`;
+      })
+      .join("")}</div>`;
+
+    requestAnimationFrame(() => {
+      $$(".funnel-fill", mountEl).forEach((f) => {
+        const w = f.dataset.target + "%";
+        if (REDUCE_MOTION) f.style.width = w;
+        else requestAnimationFrame(() => (f.style.width = w));
+      });
+    });
+
+    $$(".funnel-row", mountEl).forEach((row) => {
+      const s = stages[Number(row.dataset.idx)];
+      const track = $(".funnel-track", row);
+      const enter = () => showTip(track, [{ label: s.name, value: s.value.toLocaleString("en-IN") }]);
+      row.addEventListener("pointerenter", enter);
+      row.addEventListener("focus", enter);
+      row.addEventListener("pointerleave", hideTip);
+      row.addEventListener("blur", hideTip);
+    });
+  }
+
+  return { countUp, showTip, hideTip, wireToggle, rankedBar, stackedBar, funnel, cssvar, CAT };
+})();
+
 function fmtINR(rupees) {
   if (rupees === null || rupees === undefined) return "—";
   const n = Number(rupees);
@@ -139,13 +357,35 @@ async function loadHealth() {
 
 // -------------------------------------------------------------- metrics ----
 
-function kpiCard({ accent, icon, label, value, unit, foot }) {
+let _kpiAnimQueue = [];
+
+function kpiCard({ accent, icon, label, raw, fmt, unit, foot }) {
+  const idx = _kpiAnimQueue.length;
+  _kpiAnimQueue.push({ raw, fmt });
   return `
     <div class="kpi" data-accent="${accent}">
       <div class="kpi-label">${icon}<span>${esc(label)}</span></div>
-      <div class="kpi-value">${value}${unit ? `<span class="unit">${esc(unit)}</span>` : ""}</div>
+      <div class="kpi-value"><span data-countup-idx="${idx}">${esc(fmt(0))}</span>${unit ? `<span class="unit">${esc(unit)}</span>` : ""}</div>
       ${foot ? `<div class="kpi-foot">${foot}</div>` : ""}
     </div>`;
+}
+
+/** Animate a KPI value through its own formatter each frame — handles ₹/Cr/% suffixes
+    correctly, unlike a generic prefix+suffix count-up. */
+function animateKpiValues(container) {
+  _kpiAnimQueue.forEach(({ raw, fmt }, idx) => {
+    const el = container.querySelector(`[data-countup-idx="${idx}"]`);
+    if (!el) return;
+    if (REDUCE_MOTION || !isFinite(raw)) { el.textContent = fmt(raw); return; }
+    const t0 = performance.now();
+    const ease = (t) => 1 - Math.pow(1 - t, 3);
+    const duration = 850;
+    (function frame(now) {
+      const p = Math.min(1, (now - t0) / duration);
+      el.textContent = fmt(raw * ease(p));
+      if (p < 1) requestAnimationFrame(frame);
+    })(t0);
+  });
 }
 
 const ICONS = {
@@ -159,86 +399,168 @@ const ICONS = {
 };
 
 function renderMetrics(m) {
+  _kpiAnimQueue = [];
   const grid = $("#kpi-grid");
   grid.innerHTML = [
     kpiCard({
       accent: "blue", icon: ICONS.risk, label: "Revenue at risk",
-      value: fmtINR(m.revenue_at_risk_rupees),
+      raw: m.revenue_at_risk_rupees ?? 0, fmt: fmtINR,
       foot: `${m.total_cases ?? 0} cases &middot; full: ${fmtINRFull(m.revenue_at_risk_rupees)}`,
     }),
     kpiCard({
       accent: "green", icon: ICONS.recovered, label: "Recovered value",
-      value: fmtINR(m.recovered_value_rupees),
+      raw: m.recovered_value_rupees ?? 0, fmt: fmtINR,
       foot: `${m.recovered_cases ?? 0} cases recovered`,
     }),
     kpiCard({
       accent: "green", icon: ICONS.rate, label: "Recovery rate",
-      value: fmtPct(m.recovery_rate_pct),
+      raw: m.recovery_rate_pct ?? 0, fmt: (v) => fmtPct(v),
       foot: "value-weighted, not case-weighted",
     }),
     kpiCard({
       accent: "blue", icon: ICONS.bolt, label: "Actions executed",
-      value: (m.actions_executed ?? 0).toLocaleString("en-IN"),
+      raw: m.actions_executed ?? 0, fmt: (v) => Math.round(v).toLocaleString("en-IN"),
       foot: "dispatched and ran",
     }),
     kpiCard({
       accent: "amber", icon: ICONS.shield, label: "Actions blocked",
-      value: (m.actions_blocked ?? 0).toLocaleString("en-IN"),
+      raw: m.actions_blocked ?? 0, fmt: (v) => Math.round(v).toLocaleString("en-IN"),
       foot: "denied, reviewed, or stopped by policy",
     }),
     kpiCard({
       accent: "blue", icon: ICONS.brain, label: "AI confidence",
-      value: fmtPct(m.ai_confidence_pct),
+      raw: m.ai_confidence_pct ?? 0, fmt: (v) => fmtPct(v),
       foot: "mean over diagnosed cases",
     }),
     kpiCard({
       accent: "red", icon: ICONS.x, label: "Failure rate",
-      value: fmtPct(m.failure_rate_pct),
+      raw: m.failure_rate_pct ?? 0, fmt: (v) => fmtPct(v),
       foot: "not recovered, any reason",
     }),
   ].join("");
+  animateKpiValues(grid);
 
-  renderBars("#methods", Object.entries(m.methods || {}).sort((a, b) => b[1].total - a[1].total), (name, v) => ({
-    name: name.toUpperCase(),
-    val: `${v.recovered}/${v.total} · ${fmtPct(v.recovery_rate_pct, 0)}`,
-    pct: v.recovery_rate_pct,
-    cls: v.recovery_rate_pct >= 50 ? "is-ok" : v.recovery_rate_pct >= 20 ? "" : "is-warn",
-  }));
+  renderHero(m);
 
-  const maxErr = Math.max(1, ...(m.errors || []).map((e) => e.total));
-  renderBars("#errors", (m.errors || []).map((e) => [e.reason, e]), (name, e) => ({
-    name: titleCase(name),
-    val: `${e.total}`,
-    pct: (e.total / maxErr) * 100,
-    cls: "",
-  }));
+  // ---- recovery by method: sequential magnitude, one hue ----
+  const methodItems = Object.entries(m.methods || {})
+    .sort((a, b) => b[1].recovery_rate_pct - a[1].recovery_rate_pct)
+    .map(([name, v]) => ({ name: name.toUpperCase(), value: v.recovery_rate_pct, raw: v }));
+  viz.rankedBar($("#methods"), $("#methods-table"), methodItems, {
+    valueFmt: (it) => `${fmtPct(it.value, 0)}`,
+    tooltipRows: (it) => [
+      { label: "recovered / total", value: `${it.raw.recovered} / ${it.raw.total}` },
+      { label: "value recovered", value: fmtINR(it.raw.recovered_rupees) },
+    ],
+    headers: ["Method", "Recovered", "Total", "Rate"],
+    tableRows: (items) => items.map((it) => [it.name, it.raw.recovered, it.raw.total, fmtPct(it.value, 1)]),
+  });
 
-  const states = $("#states");
-  const order = ["RECOVERED", "SCHEDULED", "EXECUTING", "DIAGNOSED", "DETECTED", "FAILED_ATTEMPT", "QUARANTINED", "ABANDONED", "HOLDOUT_CLOSED"];
-  const entries = Object.entries(m.states || {}).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
-  states.innerHTML = entries.length
-    ? entries.map(([s, n]) => `
-        <div class="state-row">
-          <span class="badge badge-${STATE_BADGE[s] || "mute"}">${titleCase(s)}</span>
-          <span class="n">${n}</span>
-        </div>`).join("")
-    : `<div class="empty">No cases yet</div>`;
+  // ---- top failure reasons: sequential magnitude ----
+  const errorItems = (m.errors || []).map((e) => ({ name: titleCase(e.reason), value: e.total, raw: e }));
+  viz.rankedBar($("#errors"), $("#errors-table"), errorItems, {
+    valueFmt: (it) => it.value.toLocaleString("en-IN"),
+    tooltipRows: (it) => [
+      { label: "occurrences", value: it.value.toLocaleString("en-IN") },
+      { label: "recovered", value: `${it.raw.recovered} of ${it.value}` },
+    ],
+    headers: ["Reason", "Occurrences", "Recovered"],
+    tableRows: (items) => items.map((it) => [it.name, it.value, it.raw.recovered]),
+  });
+
+  // ---- case states: categorical part-to-whole ----
+  const stateOrder = ["RECOVERED", "SCHEDULED", "EXECUTING", "DIAGNOSED", "DETECTED", "FAILED_ATTEMPT", "QUARANTINED", "ABANDONED", "HOLDOUT_CLOSED"];
+  const stateSegments = Object.entries(m.states || {})
+    .sort((a, b) => stateOrder.indexOf(a[0]) - stateOrder.indexOf(b[0]))
+    .map(([s, n]) => ({ name: titleCase(s), value: n }));
+  viz.stackedBar($("#states"), null, $("#states-table"), stateSegments, {
+    headers: ["State", "Count", "Share"],
+    tableRows: (segs, total) => segs.map((s) => [s.name, s.value, fmtPct((s.value / total) * 100, 1)]),
+  });
+
+  // ---- recovery funnel ----
+  viz.funnel($("#funnel"), [
+    { name: "At risk", value: m.total_cases ?? 0 },
+    { name: "Actioned", value: m.actions_executed ?? 0 },
+    { name: "Recovered", value: m.recovered_cases ?? 0 },
+  ]);
 
   $("#foot-meta").textContent = `${m.total_cases ?? 0} cases · ${Object.keys(m.cohorts || {}).length} arms · updated ${new Date().toLocaleTimeString("en-IN")}`;
 }
 
-function renderBars(sel, entries, mapFn) {
-  const el = $(sel);
-  if (!entries.length) { el.innerHTML = `<div class="empty">No data</div>`; return; }
-  el.innerHTML = entries.map(([key, v]) => {
-    const { name, val, pct, cls } = mapFn(key, v);
-    return `
-      <div class="bar-row">
-        <span class="bar-name">${esc(name)}</span>
-        <span class="bar-val">${esc(val)}</span>
-        <div class="bar-track"><div class="bar-fill ${cls}" style="width:${Math.min(100, Math.max(2, pct || 0))}%"></div></div>
-      </div>`;
-  }).join("");
+/** Hero: incremental impact, emphasis form (accent vs. de-emphasis gray) — never
+    categorical/donut. Holdout is context, not a peer series. */
+function renderHero(m) {
+  const c = m.cohorts || {};
+  const t = c.TREATED, h = c.HOLDOUT;
+  const figEl = $("#hero-figure"), capEl = $("#hero-caption"), cmpEl = $("#hero-compare");
+
+  if (!t || !h || !t.cases || !h.cases) {
+    figEl.textContent = "—";
+    figEl.className = "hero-figure is-flat";
+    capEl.textContent = "Needs cases in both the treated and holdout arms to compute — trigger a failure drill below to populate data.";
+    cmpEl.innerHTML = "";
+    return;
+  }
+
+  const tRate = (t.recovered / t.cases) * 100;
+  const hRate = (h.recovered / h.cases) * 100;
+  const delta = tRate - hRate;
+  const sign = delta > 0.05 ? "+" : delta < -0.05 ? "" : "±";
+  figEl.className = "hero-figure " + (delta > 0.05 ? "is-up" : delta < -0.05 ? "is-down" : "is-flat");
+  figEl.innerHTML = `<span class="sign">${sign}</span><span data-hero-num>0.0</span><span class="unit" style="font-size:0.5em;margin-left:2px">pp</span>`;
+
+  const numEl = figEl.querySelector("[data-hero-num]");
+  if (REDUCE_MOTION) {
+    numEl.textContent = Math.abs(delta).toFixed(1);
+  } else {
+    const t0 = performance.now();
+    const ease = (x) => 1 - Math.pow(1 - x, 3);
+    (function frame(now) {
+      const p = Math.min(1, (now - t0) / 900);
+      numEl.textContent = (Math.abs(delta) * ease(p)).toFixed(1);
+      if (p < 1) requestAnimationFrame(frame);
+    })(t0);
+  }
+
+  capEl.innerHTML = `Treated recovers at <strong>${fmtPct(tRate, 1)}</strong> vs. <strong>${fmtPct(hRate, 1)}</strong> in the untouched holdout — the gap is what the agent can actually claim credit for, not the gross recovered total.`;
+
+  const maxRate = Math.max(tRate, hRate, 1);
+  cmpEl.innerHTML = `
+    <div class="hc-row">
+      <span class="hc-label"><span class="swatch" style="background:var(--rzp-blue)"></span>Treated</span>
+      <div class="hc-track" data-tip="treated"><div class="hc-fill is-accent" style="width:0" data-target="${(tRate / maxRate) * 100}"></div></div>
+      <span class="hc-val">${fmtPct(tRate, 1)}</span>
+    </div>
+    <div class="hc-sub">${t.recovered.toLocaleString("en-IN")} of ${t.cases.toLocaleString("en-IN")} cases &middot; ${fmtINR(t.amount_rupees)} at risk</div>
+    <div class="hc-row">
+      <span class="hc-label"><span class="swatch" style="background:var(--viz-emphasis-gray)"></span>Holdout</span>
+      <div class="hc-track" data-tip="holdout"><div class="hc-fill is-muted" style="width:0" data-target="${(hRate / maxRate) * 100}"></div></div>
+      <span class="hc-val">${fmtPct(hRate, 1)}</span>
+    </div>
+    <div class="hc-sub">${h.recovered.toLocaleString("en-IN")} of ${h.cases.toLocaleString("en-IN")} cases &middot; no intervention &middot; ${fmtINR(h.amount_rupees)} at risk</div>
+  `;
+  requestAnimationFrame(() => {
+    $$(".hc-fill", cmpEl).forEach((f) => {
+      const w = f.dataset.target + "%";
+      if (REDUCE_MOTION) f.style.width = w;
+      else requestAnimationFrame(() => (f.style.width = w));
+    });
+  });
+  $$(".hc-track", cmpEl).forEach((track) => {
+    const isT = track.dataset.tip === "treated";
+    const arm = isT ? t : h;
+    const rate = isT ? tRate : hRate;
+    const enter = () => viz.showTip(track, [
+      { label: "recovery rate", value: fmtPct(rate, 1) },
+      { label: "cases", value: `${arm.recovered} / ${arm.cases}` },
+      { label: "value", value: fmtINR(arm.amount_rupees) },
+    ]);
+    track.addEventListener("pointerenter", enter);
+    track.addEventListener("focus", enter);
+    track.addEventListener("pointerleave", viz.hideTip);
+    track.addEventListener("blur", viz.hideTip);
+  });
 }
 
 // -------------------------------------------------------------- demos ------
@@ -343,10 +665,16 @@ async function loadTransactions() {
 }
 
 async function loadMetrics() {
+  // hold the previous render dimmed during refetch — no skeleton, no flash
+  const dimTargets = [$("#kpi-grid"), $(".hero-panel"), $(".grid-3"), $("#funnel")].filter(Boolean);
+  const isRefetch = dimTargets.some((el) => el.children.length > 0);
+  if (isRefetch) dimTargets.forEach((el) => el.classList.add("is-refetching"));
   try {
     renderMetrics(await fetchJSON("/api/metrics"));
   } catch (e) {
     $("#kpi-grid").innerHTML = `<div class="empty">Could not load metrics — ${esc(e.message)}</div>`;
+  } finally {
+    dimTargets.forEach((el) => el.classList.remove("is-refetching"));
   }
 }
 
@@ -522,6 +850,8 @@ function init() {
 
   $("#btn-prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - state.limit); loadTransactions(); });
   $("#btn-next").addEventListener("click", () => { state.offset += state.limit; loadTransactions(); });
+
+  $$(".chart-toggle").forEach(viz.wireToggle);
 
   setInterval(loadHealth, 30000);
 }

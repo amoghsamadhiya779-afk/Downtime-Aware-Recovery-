@@ -51,9 +51,9 @@
     }
   },
   "secondary": {
-    "wasted_attempt_rate": 0.06593406593406594,
+    "wasted_attempt_rate": 0.06557377049180328,
     "wasted_n": 12,
-    "total_attempts": 182,
+    "total_attempts": 183,
     "n_deferred": 0,
     "n_abandoned": 49,
     "n_holdout_closed": 73
@@ -61,9 +61,9 @@
   "safety": {
     "holdout_contamination": 0,
     "cap_breach": 0,
-    "veto_rate": 0.22916666666666666,
-    "veto_n": 55,
-    "veto_total": 240
+    "veto_rate": 0.23045267489711935,
+    "veto_n": 56,
+    "veto_total": 243
   },
   "system": {
     "chain_ok": true,

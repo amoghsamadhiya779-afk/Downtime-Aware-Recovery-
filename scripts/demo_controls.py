@@ -1,11 +1,11 @@
-"""Developer & Demo CLI Control Runner for Real Failure Modes.
+"""Developer & Demo CLI Control Runner for the Three Deterministic Scenarios.
 
 Usage:
-  python scripts/demo_controls.py --scenario duplicate_event
-  python scripts/demo_controls.py --scenario invalid_ai_output
-  python scripts/demo_controls.py --scenario policy_rejection
-  python scripts/demo_controls.py --scenario execution_timeout
+  python scripts/demo_controls.py --scenario successful_recovery
+  python scripts/demo_controls.py --scenario unsafe_ai_blocked
+  python scripts/demo_controls.py --scenario duplicate_timeout_handled
   python scripts/demo_controls.py --all
+  python scripts/demo_controls.py --clean
 """
 
 from __future__ import annotations
@@ -20,8 +20,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from agent import db as agent_db
-from agent.clock import VirtualClock
 from agent.demo_scenarios import run_demo_scenario
 from agent.downtime import DowntimeStore
 from agent.policy.engine import load_rules
@@ -34,13 +39,13 @@ def print_scenario_result(res: dict) -> None:
     msg = res.get("message", "")
     detail = res.get("detail", {})
 
-    print("\n" + "=" * 70)
-    print(f"  DEMO CONTROL: {title.upper()}")
-    print("=" * 70)
+    print("\n" + "=" * 76)
+    print(f"  DEMO SCENARIO: {title.upper()}")
+    print("=" * 76)
     print(f"  Scenario:   {scenario}")
     print(f"  Case ID:    {case_id}")
     print(f"  Summary:    {msg}")
-    print("-" * 70)
+    print("-" * 76)
 
     if detail:
         ev = detail.get("event", {})
@@ -63,30 +68,37 @@ def print_scenario_result(res: dict) -> None:
         print(f"  7. EXECUTION:       Dispatched={exec_info.get('is_dispatched')}, Mode={exec_info.get('execution_mode')}, Replayed={exec_info.get('replayed')}")
         print(f"  8. OUTCOME:         FinalState={out.get('final_state')}, Status={out.get('outcome_status')}, Succeeded={out.get('succeeded')}")
         print(f"  9. AUDIT TRAIL:     ChainVerified={aud.get('chain_valid')}, TotalEvents={aud.get('total_events')}")
-    print("=" * 70 + "\n")
+    print("=" * 76 + "\n")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Trigger Real Failure Mode Scenarios")
+    parser = argparse.ArgumentParser(description="Trigger Exactly Three Deterministic Demo Scenarios")
     parser.add_argument(
         "--scenario",
         type=str,
-        choices=["duplicate_event", "invalid_ai_output", "policy_rejection", "execution_timeout"],
-        help="The failure mode to trigger",
+        default="all",
+        help="Scenario to trigger: 'successful_recovery' (1), 'unsafe_ai_blocked' (2), 'duplicate_timeout_handled' (3), or 'all'",
     )
-    parser.add_argument("--all", action="store_true", help="Run all 4 demo scenarios sequentially")
-    parser.add_argument("--db", type=str, default=":memory:", help="SQLite database path")
+    parser.add_argument("--all", action="store_true", help="Run all 3 deterministic scenarios sequentially")
+    parser.add_argument("--clean", action="store_true", default=True, help="Run against a clean in-memory database state")
+    parser.add_argument("--db", type=str, default=None, help="Optional SQLite database path (defaults to :memory: for clean state)")
     args = parser.parse_args()
 
-    conn = agent_db.connect(args.db)
+    db_target = args.db if args.db else ":memory:"
+    conn = agent_db.connect(db_target)
     rules = load_rules()
     downtime = DowntimeStore(conn)
 
-    scenarios_to_run = (
-        ["duplicate_event", "invalid_ai_output", "policy_rejection", "execution_timeout"]
-        if args.all
-        else [args.scenario] if args.scenario else ["duplicate_event"]
-    )
+    canonical_scenarios = [
+        "successful_recovery",
+        "unsafe_ai_blocked",
+        "duplicate_timeout_handled",
+    ]
+
+    if args.all or args.scenario == "all":
+        scenarios_to_run = canonical_scenarios
+    else:
+        scenarios_to_run = [args.scenario]
 
     for sc in scenarios_to_run:
         result = run_demo_scenario(conn, sc, rules=rules, downtime=downtime)

@@ -36,7 +36,7 @@
   --hairline: #dfe3e9;
   --hairline-soft: #eaedf1;
 
-  /* semantic */
+  /* semantic (badge text — already tuned for text-on-tint contrast; kept as-is) */
   --ok: #0f7b55;
   --ok-bg: #e6f4ee;
   --warn: #9a6300;
@@ -45,6 +45,44 @@
   --danger-bg: #fbeaea;
   --info: var(--rzp-blue);
   --info-bg: var(--rzp-blue-100);
+
+  /* ============================================================
+     Chart data-ink — dataviz skill's validated reference palette,
+     categorical slot 1 substituted with Razorpay's brand blue and
+     re-validated (node scripts/validate_palette.js, both modes pass,
+     no new WARN introduced beyond the reference palette's own).
+     ============================================================ */
+  --viz-surface: #fcfcfb;
+  --viz-ink: #0b0b0b;
+  --viz-ink-secondary: #52514e;
+  --viz-ink-muted: #898781;
+  --viz-grid: #e1e0d9;
+  --viz-baseline: #c3c2b7;
+  --viz-emphasis-gray: #c3c2b7;
+
+  /* categorical — fixed order, never cycled */
+  --viz-cat-1: #305eff; /* blue — Razorpay brand, validated in slot 1 */
+  --viz-cat-2: #eb6834; /* orange */
+  --viz-cat-3: #1baf7a; /* aqua */
+  --viz-cat-4: #eda100; /* yellow */
+  --viz-cat-5: #e87ba4; /* magenta */
+  --viz-cat-6: #008300; /* green */
+  --viz-cat-7: #4a3aa7; /* violet */
+  --viz-cat-8: #e34948; /* red */
+
+  /* sequential blue ramp — magnitude (methods, error reasons) */
+  --viz-seq-150: #b7d3f6;
+  --viz-seq-250: #86b6ef; /* ordinal floor — funnel stages start no lighter */
+  --viz-seq-350: #5598e7;
+  --viz-seq-450: #2a78d6;
+  --viz-seq-550: #1c5cab;
+  --viz-seq-650: #104281;
+
+  /* status — fixed, never reused for a categorical series */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
 
   /* type */
   --font-display: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
@@ -742,3 +780,281 @@ footer.foot {
   .status-chip span:not(.dot) { display: none; }
   .status-chip { padding: 0 9px; }
 }
+
+/* ============================================================================
+   Motion system — dataviz skill §5/§6. Every animation degrades to an instant
+   correct final state under prefers-reduced-motion; nothing here is required
+   to read the page, only to introduce it.
+   ========================================================================= */
+
+@keyframes rcp-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rcp-stagger > * {
+  opacity: 0;
+  animation: rcp-in .42s cubic-bezier(.16,.84,.44,1) forwards;
+}
+.rcp-stagger > *:nth-child(1)  { animation-delay: .00s; }
+.rcp-stagger > *:nth-child(2)  { animation-delay: .04s; }
+.rcp-stagger > *:nth-child(3)  { animation-delay: .08s; }
+.rcp-stagger > *:nth-child(4)  { animation-delay: .12s; }
+.rcp-stagger > *:nth-child(5)  { animation-delay: .16s; }
+.rcp-stagger > *:nth-child(6)  { animation-delay: .20s; }
+.rcp-stagger > *:nth-child(7)  { animation-delay: .24s; }
+.rcp-stagger > *:nth-child(8)  { animation-delay: .28s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rcp-stagger > * { animation: none; opacity: 1; transform: none; }
+}
+
+/* refetch: hold the previous render, dim it — never a skeleton flash
+   (anti-patterns.md: "Skeleton flash on refetch") */
+.is-refetching { opacity: .5; transition: opacity .15s ease; pointer-events: none; }
+
+/* ============================================================================
+   Project intro
+   ========================================================================= */
+
+.intro-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px;
+  background: linear-gradient(135deg, var(--rzp-blue-100) 0%, var(--surface) 62%);
+  border: 1px solid var(--rzp-blue-200);
+  border-radius: var(--radius-lg);
+  margin-bottom: 22px;
+}
+.intro-icon {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  background: var(--rzp-blue);
+  color: #fff;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+}
+.intro-icon svg { width: 18px; height: 18px; }
+.intro-panel h2 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.intro-panel p { margin: 0; font-size: 12.5px; color: var(--slate); line-height: 1.6; max-width: 76ch; }
+.intro-panel strong { color: var(--ink-deep); font-weight: 600; }
+
+/* ============================================================================
+   Hero — incremental impact (emphasis form: one accent, one de-emphasis gray;
+   NOT a categorical/donut treatment — dataviz choosing-a-form.md)
+   ========================================================================= */
+
+.hero-panel {
+  display: grid;
+  grid-template-columns: minmax(200px, 320px) 1fr;
+  gap: 24px;
+  padding: 22px 24px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+}
+@media (max-width: 760px) {
+  .hero-panel { grid-template-columns: 1fr; }
+}
+
+.hero-figure-wrap .eyebrow { margin-bottom: 8px; }
+.hero-figure {
+  font-family: var(--font-display);
+  font-weight: 800;
+  /* proportional figures at display size — dataviz marks-and-anatomy.md:
+     tabular-nums on a large standalone number makes it look loose */
+  font-variant-numeric: normal;
+  font-size: clamp(34px, 5vw, 50px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  color: var(--ink-deep);
+  white-space: nowrap;
+}
+.hero-figure .sign { color: var(--status-good); }
+.hero-figure.is-flat .sign,
+.hero-figure.is-down .sign { color: var(--viz-ink-secondary); }
+.hero-caption {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--slate-muted);
+  line-height: 1.55;
+  max-width: 46ch;
+}
+.hero-caption .cta { color: var(--rzp-blue); font-weight: 600; }
+
+.hero-compare { display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+.hc-row { display: grid; grid-template-columns: 84px 1fr auto; align-items: center; gap: 10px; }
+.hc-label { font-size: 12px; font-weight: 600; color: var(--slate); }
+.hc-label .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+.hc-track {
+  height: 20px;
+  background: var(--surface-3);
+  border-radius: 5px;
+  overflow: hidden;
+  position: relative;
+  cursor: default;
+}
+.hc-fill {
+  height: 100%;
+  border-radius: 5px 0 0 5px;
+  width: 0;
+  transition: width .7s cubic-bezier(.16,.84,.44,1);
+}
+.hc-fill.is-accent { background: var(--rzp-blue); }
+.hc-fill.is-muted  { background: var(--viz-emphasis-gray); }
+.hc-val { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--ink-deep); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hc-sub { grid-column: 2 / 4; font-size: 10.5px; color: var(--slate-light); margin-top: -6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-fill { transition: none; }
+}
+
+/* ============================================================================
+   Chart panels — shared chrome for every chart in the breakdown section
+   ========================================================================= */
+
+.chart-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+}
+.chart-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--slate-light);
+  font-size: 10.5px; font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chart-toggle:hover { color: var(--slate); border-color: #cbd3dd; }
+.chart-toggle svg { width: 11px; height: 11px; }
+.chart-toggle[aria-pressed="true"] { background: var(--rzp-blue-100); color: var(--rzp-blue); border-color: var(--rzp-blue-200); }
+
+.chart-mount { min-height: 30px; }
+.chart-table { display: none; width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.chart-table.is-visible { display: table; }
+.chart-mount.is-hidden { display: none; }
+.chart-table th, .chart-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--hairline-soft); color: var(--slate); }
+.chart-table th { color: var(--slate-light); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.chart-table td.num { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- ranked bar (sequential magnitude — methods, error reasons) ---- */
+
+.rbar-list { display: flex; flex-direction: column; gap: 3px; }
+.rbar-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 4px;
+  border-radius: 6px;
+  cursor: default;
+  position: relative;
+}
+.rbar-row:hover, .rbar-row:focus-visible { background: var(--surface-3); }
+.rbar-name { font-size: 11.5px; font-weight: 500; color: var(--ink); text-transform: capitalize; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rbar-track { height: 22px; background: var(--surface-3); border-radius: 5px; position: relative; overflow: visible; }
+.rbar-fill {
+  height: 100%;
+  max-width: 100%;
+  border-radius: 5px 4px 4px 5px;
+  background: var(--viz-seq-450);
+  width: 0;
+  transition: width .6s cubic-bezier(.16,.84,.44,1);
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.rbar-fill.is-low { background: var(--viz-seq-250); }
+.rbar-tip {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-deep);
+  white-space: nowrap;
+}
+.rbar-fill.is-tiny .rbar-tip { margin-left: 6px; color: var(--viz-ink-secondary); }
+@media (prefers-reduced-motion: reduce) {
+  .rbar-fill { transition: none; }
+}
+
+/* ---- stacked bar (categorical part-to-whole — case states) ---- */
+
+.sbar-track {
+  display: flex;
+  height: 26px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-3);
+  gap: 2px; /* the surface-gap spacer, not a border */
+}
+.sbar-seg {
+  height: 100%;
+  width: 0;
+  flex: 0 0 auto;
+  transition: width .55s cubic-bezier(.16,.84,.44,1), filter .12s ease;
+  cursor: default;
+  position: relative;
+}
+.sbar-seg:hover, .sbar-seg:focus-visible { filter: brightness(1.08); }
+.sbar-seg:first-child { border-radius: 5px 0 0 5px; }
+.sbar-seg:last-child  { border-radius: 0 5px 5px 0; }
+@media (prefers-reduced-motion: reduce) {
+  .sbar-seg { transition: none; }
+}
+
+.sbar-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
+.sbar-key { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--slate); cursor: default; }
+.sbar-key .swatch { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+.sbar-key .n { font-family: var(--font-mono); color: var(--slate-light); font-variant-numeric: tabular-nums; }
+
+/* ---- funnel (ordinal ramp — recovery stages) ---- */
+
+.funnel { display: flex; flex-direction: column; gap: 9px; }
+.funnel-row { display: grid; grid-template-columns: 118px 1fr 64px; align-items: center; gap: 10px; }
+.funnel-label { font-size: 11.5px; font-weight: 500; color: var(--ink); }
+.funnel-track { height: 22px; background: var(--surface-3); border-radius: 5px; }
+.funnel-fill {
+  height: 100%;
+  border-radius: 5px 4px 4px 5px;
+  width: 0;
+  transition: width .6s cubic-bezier(.16,.84,.44,1);
+  cursor: default;
+}
+.funnel-val { font-family: var(--font-mono); font-size: 11px; text-align: right; color: var(--ink-deep); font-weight: 600; font-variant-numeric: tabular-nums; }
+.funnel-drop { grid-column: 2 / 3; font-size: 10px; color: var(--slate-light); margin-top: -3px; }
+@media (prefers-reduced-motion: reduce) {
+  .funnel-fill { transition: none; }
+}
+
+/* ---- shared tooltip (chart marks are the hit target — interaction.md) ---- */
+
+.viz-tooltip {
+  position: fixed;
+  z-index: 300;
+  pointer-events: none;
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ink-deep);
+  color: #fff;
+  font-size: 11.5px;
+  line-height: 1.5;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.viz-tooltip.is-visible { opacity: 1; transform: translateY(0); }
+.viz-tooltip .vt-value { font-weight: 700; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.viz-tooltip .vt-label { color: rgba(255,255,255,.68); }
+@media (prefers-reduced-motion: reduce) {
+  .viz-tooltip { transition: none; }
+}
+
+/* count-up target — no visual change, just marks the element for app.js */
+[data-countup] { font-variant-numeric: normal; }
