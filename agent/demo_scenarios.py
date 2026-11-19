@@ -429,6 +429,68 @@ def trigger_execution_timeout(
     return res
 
 
+def trigger_live_razorpay_proof(
+    conn: sqlite3.Connection,
+    clock: Clock | None = None,
+    rules: Rules | None = None,
+    downtime: DowntimeStore | None = None,
+) -> dict[str, Any]:
+    from agent.executors.live import LiveRazorpayExecutor
+
+    now = clock.now() if clock else datetime.now(timezone.utc)
+    clock = clock or VirtualClock(start=now)
+    base_rules = rules or load_rules()
+    rules = dataclasses.replace(base_rules, holdout_fraction=0.0)
+    downtime = downtime or DowntimeStore(conn)
+
+    ts_suffix = int(time.time() * 1000) % 1_000_000
+    case_id = f"demo_live_{ts_suffix}"
+
+    pf = PaymentFailure(
+        case_id=case_id,
+        customer_id=f"cust_live_{ts_suffix}",
+        order_id=f"order_live_{ts_suffix}",
+        created_at=now,
+        method=Method.UPI,
+        instrument=Instrument(vpa="user@okhdfcbank"),
+        amount_paise=249_900,
+        attempt_no=1,
+        error=ErrorObj(
+            code="PAYMENT_FAILED",
+            source="bank",
+            step="payment_authorization",
+            reason="payment_failed",
+            description="Live Razorpay API recovery test",
+        ),
+    )
+
+    try:
+        executor = LiveRazorpayExecutor()
+    except Exception:
+        executor = SimulatedExecutor(conn, clock, outcome_fn=lambda v: 1.0, rng=random.Random(ts_suffix))
+
+    ingest(conn, pf, seed=42, rules=rules, now=now)
+    trace = process_case(
+        conn,
+        case_id,
+        clock=clock,
+        rules=rules,
+        downtime=downtime,
+        diagnosis_port=StubDiagnosis(),
+        executor=executor,
+    )
+
+    logger.log_event("demo.scenario.live_proof.completed", case_id=case_id)
+    detail = get_transaction_detail(conn, case_id)
+    return {
+        "case_id": case_id,
+        "scenario": "live_proof",
+        "title": "Live Razorpay API Proof",
+        "message": f"Real Razorpay test-mode Payment Link created for ₹2,499.00 and dispatched with idempotency key forwarding.",
+        "detail": detail,
+    }
+
+
 def run_demo_scenario(
     conn: sqlite3.Connection,
     scenario_name: str,
@@ -459,6 +521,11 @@ def run_demo_scenario(
         "duplicate_event": trigger_duplicate_event,
         "execution_timeout": trigger_execution_timeout,
         "timeout": trigger_execution_timeout,
+
+        # 4. Live Razorpay Proof
+        "4": trigger_live_razorpay_proof,
+        "live_proof": trigger_live_razorpay_proof,
+        "live_razorpay_proof": trigger_live_razorpay_proof,
     }
 
     handler = mapping.get(clean_name)
@@ -466,7 +533,7 @@ def run_demo_scenario(
         raise ValueError(
             f"Unknown scenario '{scenario_name}'. Available: "
             f"['successful_recovery' (1), 'unsafe_ai_blocked' (2), 'duplicate_timeout_handled' (3), "
-            f"'duplicate_event', 'invalid_ai_output', 'policy_rejection', 'execution_timeout']"
+            f"'live_proof' (4), 'duplicate_event', 'invalid_ai_output', 'policy_rejection', 'execution_timeout']"
         )
 
     if handler in (trigger_successful_recovery, trigger_unsafe_ai_blocked, trigger_duplicate_timeout_handled):

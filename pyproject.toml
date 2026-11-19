@@ -21,7 +21,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["agent", "agent.policy", "agent.diagnosis", "agent.executors", "datagen", "evalharness"]
+packages = ["agent", "agent.policy", "agent.diagnosis", "agent.executors", "agent.security", "datagen", "evalharness"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

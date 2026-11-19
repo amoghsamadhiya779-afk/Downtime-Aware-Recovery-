@@ -850,3 +850,71 @@ Sequential evaluation loops over high-volume corpora triggered free-tier rate li
    - Extended `scripts/docs_check.py` to strictly enforce that all numeric claims across README.md match raw evaluation outputs.
 
 
+---
+
+## ADR-024: Deprecation of Standalone JSON Dataset Generator
+
+### Context
+
+Two independent dataset generators coexisted:
+
+1. **`datagen/generate.py`** → SQLite corpora → `evalharness/run.py` → `eval/report.md`. This is the canonical evaluation pipeline; all published numbers trace to it.
+2. **`scripts/generate_data.py`** → JSON files in `data/dataset/` → `scripts/validate_data.py`. This was the original generator, built before the evaluation harness existed. It produces a different schema, different distributions, and feeds no downstream consumer.
+
+Having two generators with unreconciled schemas, different code paths, and potentially different distributions confuses reviewers and creates a credibility risk: which numbers are authoritative?
+
+### Decision
+
+- **Deprecate** `scripts/generate_data.py` and `scripts/validate_data.py` with runtime `DeprecationWarning` and docstring notices.
+- **Retain** both files (no deletion) so historical context is preserved and the deprecation is visible in diffs.
+- **Canonical pipeline** is `datagen/generate.py` → `scripts/gen.py` → SQLite → `evalharness/run.py` → `eval/report*.md`.
+
+### Rejected
+
+- *Delete immediately*: Would lose the historical reference and make the ADR harder to trace.
+- *Unify into one generator*: The JSON format serves no active consumer; unification is effort without benefit.
+
+---
+
+## ADR-025: CaMeL Capability Lattice and Provenance DAG (`agent/security/camel.py`)
+
+### Context
+Gateway error payloads (`ErrorObj.description`) are untrusted external strings that can carry indirect prompt injections. While `DiagnosisInput` already excludes free text by convention (Invariant 3), enforcement lacked a composable runtime capability and lineage mechanism tracking how untrusted data propagates across derived values.
+
+### Decision
+Implemented a zero-dependency CaMeL security engine (`agent/security/camel.py`) based on Debenedetti et al. (arXiv:2503.18813):
+- `TrustLevel(IntEnum)` (`UNTRUSTED_EXTERNAL < QUARANTINED_AI < TRUSTED_SYSTEM`) and deeply immutable `CapabilityPassport` (`frozen=True`, `frozenset`, `tuple`).
+- `combine_passports` Lattice Meet inheriting `min(trust)` and sink set intersection (`&`), failing closed on empty input.
+- `ProvenanceGraph` append-only DAG (rejecting duplicate `node_id` overwrites) with O(V + E) BFS `has_untrusted_ancestor` failing closed on missing or untrusted nodes.
+- `declassify_enum` as the sole legal promotion boundary into closed `Enum` types, paired with `enforce_sink` raising `CaMeLSecurityViolation`.
+
+### Rejected
+- *Regex/heuristic prompt-injection filters*: Easily bypassed by encoding/paraphrasing and provides no structural control-flow/data-flow separation.
+- *Mutable `set`/`list` capabilities on passports*: Would allow silent in-place privilege escalation without recording new provenance nodes.
+- *Allowing open types (`str`/`int`) in `declassify_enum`*: Would reopen arbitrary instruction smuggling across the trust boundary.
+
+### Verification
+12 unit/adversarial tests in `tests/test_camel_security.py` plus 25-attack benchmark in `scripts/run_camel_eval.py` (`25/25 blocked`, `0.0%` ASR).
+
+---
+
+## ADR-026: Phase 3 Empirical Confidence Calibration and ECE (`agent/calibration.py`)
+
+### Context
+Invariant 5 forbids gating policy decisions on raw LLM self-reported confidence. `agent/policy/engine.py:evaluate()` already exposed a `calibrated_confidence` keyword seam for `CONFIDENCE_FLOOR`, but previously defaulted to identity mapping (`proposal.confidence`).
+
+### Decision
+Implemented pure-stdlib histogram calibration (`agent/calibration.py`) and wired it into `agent/pipeline.py`:
+- `BinnedCalibrator` performs O(N + M) fixed-width binning with Laplace rule-of-succession smoothing `(hits + alpha) / (counts + 2 * alpha)` and raises `RuntimeError` if called unfitted (fail closed).
+- `expected_calibration_error` computes exact M-bin ECE.
+- `process_case(..., calibrator=...)` calibrates `AMBIGUOUS` AI-1 proposals and passes `calibrated_confidence` to `evaluate()`, keeping `agent/policy/engine.py` 100% pure and leaving deterministic clean triage matches unaffected.
+
+### Rejected
+- *Platt scaling / isotonic regression via `scikit-learn`*: Would add a heavy external dependency against `CLAUDE.md` stack minimalism without serving an unmet requirement.
+- *Identity fallback on unfitted calibrator*: Would silently violate Invariant 5 by letting raw confidence gate policy without raising an error.
+- *Fitting and evaluating on the same split*: Would cause optimistic leakage; calibration fits strictly on the separate `calibration` split (`seed=12345`) and scores out-of-sample on `dev` (`seed=42`).
+
+### Verification
+`tests/test_calibration.py` verifies exact ECE math, Laplace priors, and end-to-end `CONFIDENCE_FLOOR` quarantine on an overconfident proposal; `scripts/run_camel_eval.py` reduces out-of-sample `dev` ECE from `0.2660` to `0.0340` and Brier score from `0.2901` to `0.1721`.
+
+

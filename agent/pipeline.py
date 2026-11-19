@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 
 from agent.audit import append
+from agent.calibration import BinnedCalibrator
 from agent.clock import Clock
 from agent.diagnosis.port import DiagnosisInput, DiagnosisPort
 from agent.downtime import DowntimeStore
@@ -99,7 +100,7 @@ def process_case(
     downtime: DowntimeStore,
     diagnosis_port: DiagnosisPort,
     executor: ExecutorPort,
-) -> DecisionTrace:
+    calibrator: BinnedCalibrator|None=None,)-> DecisionTrace:
     """Run one case through triage -> diagnose -> policy -> execute -> audit.
 
     Every branch appends an audit event before returning, so a partial run is always
@@ -275,7 +276,13 @@ def process_case(
             executed_action_keys=executed_keys,
         )
         t_policy = time.perf_counter()
-        verdict = evaluate(proposal, view, rules, now, dctx)
+         # Invariant 5: only ambiguous AI-1 proposals use empirical calibration.
+        cal_conf = (
+            calibrator.calibrate(proposal.confidence)
+            if calibrator is not None and tr.is_ambiguous
+            else None
+        )
+        verdict = evaluate(proposal, view, rules, now, dctx, calibrated_confidence=cal_conf)
         policy_latency_ms = (time.perf_counter() - t_policy) * 1000
         logger.log_event(
             "policy.evaluate.completed",

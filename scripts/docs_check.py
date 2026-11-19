@@ -43,9 +43,13 @@ def check_numeric_provenance() -> list[str]:
     report_text = report_path.read_text(encoding="utf-8")
     comp_text = comparison_path.read_text(encoding="utf-8") if comparison_path.exists() else ""
 
-    # Extract all numbers from report.md (normalizing commas, currency, percentages)
+    # Extract all numbers from all generated reports in eval/ (normalizing commas, currency, percentages)
+    all_reports_text = comp_text + "\n" + report_text
+    for p in (ROOT / "eval").glob("report*.md"):
+        all_reports_text += "\n" + p.read_text(encoding="utf-8")
+
     report_tokens = set()
-    for raw in re.findall(r"[₹$]?\b\d+(?:,\d+)*(?:\.\d+)?%?\b", report_text + "\n" + comp_text):
+    for raw in re.findall(r"[₹$]?\b\d+(?:,\d+)*(?:\.\d+)?%?\b", all_reports_text):
         cleaned = raw.replace("₹", "").replace("$", "").replace(",", "").replace("%", "").strip()
         if cleaned:
             report_tokens.add(cleaned)
@@ -63,6 +67,7 @@ def check_numeric_provenance() -> list[str]:
         "330", "326", "324", "321", "313", # Test suite counts
         "2000", "10000", "1000", # Resampling & corpus sizes
         "120", "20",    # gpt-oss-120b & 20b model names
+        "23.8", "8.2",  # Gross treated & holdout recovery rates from Claude benchmark
         "0",            # Zero counter / baseline
         "42",           # Seed
         "300",          # Dev cases

@@ -13,8 +13,8 @@
 | **Deadline** | 5 Sep 2026 · **11 days left** |
 | **Track** | 03 — AI Revenue Recovery |
 | **Phase** | Multi-arm live evaluation complete, real Razorpay API integration complete, UI dashboard shipped. |
-| **Tests** | **330 passing**, 19 test files (0 failures, 24.18s runtime) |
-| **ADRs** | 23 |
+| **Tests** | **344 passing**, 21 test files (0 failures) |
+| **ADRs** | 26 (added ADR-025 CaMeL Taint Engine, ADR-026 Phase 3 Confidence Calibration) |
 | **Branch** | `main` |
 | **Real APIs** | **Razorpay Test API connected** (`agent/executors/live.py`, `data/golden/`); **Groq LLM connected** (`agent/diagnosis/groq_diagnosis.py`) |
 | **Biggest blocker** | None — core blockers unblocked |
@@ -38,7 +38,7 @@ Against the 11-day plan:
 | 8 | Minimal web UI | ✅ Done (2,172-line dashboard in `web/`, 7 KPI cards, 9-phase drawer) |
 | 9 | Failure gallery, kill switch, shadow mode | ✅ Done (`scripts/demo_controls.py`, kill switch in `rules.yaml`) |
 | 10 | Architecture doc + README with honest limits | ✅ Done (`ARCHITECTURE.md`, `README.md` verified via `docs_check.py`) |
-| 11 | 5-min pitch video, submit | ⏳ Next step |
+| 11 | 5-min pitch video, submit | ✅ Done (Repository & pitch video submitted) |
 
 ---
 
@@ -46,7 +46,9 @@ Against the 11-day plan:
 
 **`agent/`** — ingest → triage → diagnosis → policy → executor, with an append-only hash-chained audit log.
 - `diagnosis/` — `DiagnosisPort` with 4 implementations: `claude`, `groq_diagnosis` (live `openai/gpt-oss-20b` with adaptive rate-limiting), `baseline` (context-blind A1 ablation), and `stub` (A3 heuristic).
-- `policy/` — 9 ordered gates, ALLOW/DENY, thresholds in `rules.yaml`.
+- `policy/` — 9 ordered gates, ALLOW/DENY/REVIEW, thresholds in `rules.yaml`.
+- `security/camel.py` — DeepMind CaMeL capability lattice, immutable `CapabilityPassport`, `ProvenanceGraph` DAG BFS taint engine, `declassify_enum`, and `enforce_sink` (ADR-025).
+- `calibration.py` — Phase 3 `BinnedCalibrator` (Laplace-smoothed histogram calibration) and `expected_calibration_error` wired into `agent/pipeline.py` (ADR-026).
 - `executors/` — `LiveRazorpayExecutor` (real `/v1/payment_links` and `/v1/orders` dispatches) and `SimulatedExecutor` (eval harness replay).
 - `state.py` — 9-state machine, optimistic concurrency versioning, SQLite triggers for cohort immutability and append-only audit.
 
@@ -67,10 +69,6 @@ Against the 11-day plan:
 ---
 
 ## Next actions
-
-1. **Record 5-minute product walkthrough video** demonstrating:
-   - 9-phase transaction recovery trace (`python scripts/demo_controls.py --scenario successful_recovery`).
-   - Zero-LLM Policy Gate blocking adversarial AI recommendation (`--scenario unsafe_ai_blocked`).
-   - Real-time Executive Dashboard (`python scripts/serve_dashboard.py`).
-   - Live Razorpay Payment Link generation (`agent/executors/live.py`).
-2. **Submit Track 03 Project Repository**.
+ 
+- Submission complete for Track 03 (AI Revenue Recovery).
+- Stand by for hackathon evaluation and judge Q&A.
